@@ -1,0 +1,1 @@
+cmd='/usr/bin/cmake;-DSDKCONFIG=/home/jr/esp-drone/sdkconfig;-DIDF_PATH=/home/jr/esp/esp-idf;-DIDF_TARGET=esp32s2;-DPYTHON_DEPS_CHECKED=1;-DPYTHON=/home/jr/.espressif/python_env/idf5.0_py3.12_env/bin/python;-DEXTRA_COMPONENT_DIRS=/home/jr/esp/esp-idf/components/bootloader;-DPROJECT_SOURCE_DIR=/home/jr/esp-drone;-GNinja;-S;<SOURCE_DIR><SOURCE_SUBDIR>;-B;<BINARY_DIR>'
