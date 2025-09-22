@@ -1,84 +1,81 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-
-// Incluye los drivers para tus periféricos
-#include "motors.h"
+#include "imu.h"
 #include "led.h"
 #include "adc.h"
+#include "motors.h"
 
-// Incluye el driver del MPU6050 (que a su vez incluye el de i2c_dev)
-#include "mpu6050.h"
+static const char *TAG = "MAIN";
 
-static const char *TAG = "APP_MAIN";
-
-#define LOW_BATTERY_VOLTAGE 3.3f
-
-// Declaramos la variable que actuará como "handle" o identificador para el bus I2C.
-// Es un 'int' porque así lo definimos en mpu6050.h (con 'typedef int I2C_TypeDef;')
-// El valor 0 corresponde a I2C_NUM_0 en nuestro driver i2c_dev.
-static int i2c_sensor_bus = 0;
+// Definimos los ejes de la IMU para facilitar la lectura en los logs.
+#define IMU_AXIS(label, value) label ": %+6.2f"
 
 void app_main(void)
 {
     ESP_LOGI(TAG, "Application starting...");
-
-    // --- 1. INICIALIZACIÓN DE MÓDULOS ---
+    
+    // --- 1. INICIALIZACIÓN DE MÓDULOS DEL SISTEMA ---
     motorsInit();
     ledInit();
     adcInit();
 
-    // Primero, inicializa el driver del bus I2C.
-    // Le pasamos la dirección de nuestra variable handle.
-    i2cdevInit(&i2c_sensor_bus);
-
-    // Luego, inicializa el driver del MPU6050, que usará el bus I2C ya configurado.
-    mpu6050Init(&i2c_sensor_bus);
-    
-    // --- 2. VERIFICACIÓN DE CONEXIÓN ---
-    // Es una buena práctica asegurarse de que la comunicación con la IMU funciona.
-    if (mpu6050TestConnection()) {
-        ESP_LOGI(TAG, "MPU6050 connection successful!");
-        ledSet(LED_GREEN, true); // Encendemos el LED verde para indicar éxito.
-    } else {
-        ESP_LOGE(TAG, "MPU6050 connection FAILED!");
-        ledSet(LED_RED, true); // Encendemos el LED rojo para indicar un error crítico.
-        // Detenemos la ejecución si la IMU no funciona, ya que es un componente esencial.
-        while(1) { 
-            vTaskDelay(pdMS_TO_TICKS(1000)); 
+    // --- 2. INICIALIZACIÓN DE LA IMU ---
+    // La función imu6Init() se encarga de todo el proceso:
+    // inicializar I2C, configurar el MPU6050 y empezar la calibración.
+    if (!imu6Init()) {
+        ESP_LOGE(TAG, "IMU initialization failed. Stopping.");
+        ledSet(LED_RED, true);
+        while (1) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
-
-    ESP_LOGI(TAG, "All modules initialized. Entering main loop.");
     
-    // Variables para almacenar los datos crudos (raw) de la IMU
-    int16_t ax, ay, az; // Acelerómetro
-    int16_t gx, gy, gz; // Giroscopio
-
-    // Variable para controlar el parpadeo del LED de batería baja
-    bool red_led_state = false;
-
     // --- 3. BUCLE PRINCIPAL ---
+    Axis3f gyro_data;
+    Axis3f accel_data;
+
+    ESP_LOGI(TAG, "Entering main loop.");
+    
     while (1) {
-        // Leer los datos de los 6 ejes del sensor
-        mpu6050GetMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+        // La función imu6Read() lee los datos, los filtra y los calibra.
+        imu6Read(&gyro_data, &accel_data);
+        
+        // Verificamos si la IMU ha terminado el proceso de calibración.
+        if (imu6IsCalibrated()) {
+            // Imprimimos los valores calibrados y filtrados.
+            ESP_LOGI(TAG, "IMU Data | "
+                     IMU_AXIS("Gyro-X", gyro_data.x) " | "
+                     IMU_AXIS("Gyro-Y", gyro_data.y) " | "
+                     IMU_AXIS("Gyro-Z", gyro_data.z) " | "
+                     IMU_AXIS("Accel-X", accel_data.x) " | "
+                     IMU_AXIS("Accel-Y", accel_data.y) " | "
+                     IMU_AXIS("Accel-Z", accel_data.z),
+                     gyro_data.x, gyro_data.y, gyro_data.z,
+                     accel_data.x, accel_data.y, accel_data.z);
+                     
+            ledSet(LED_GREEN, true); // Indicamos que el sistema está listo.
+        } else {
+            // Si no está calibrada, mostramos el estado actual.
+            ESP_LOGW(TAG, "IMU is %s...", imu6GetStateString());
+            ledSet(LED_RED, true); // Puedes usar el LED rojo para indicar que está calibrando.
+        }
 
-        // Imprimir los valores en la consola
-        ESP_LOGI(TAG, "IMU RAW -> Accel[X:%6d, Y:%6d, Z:%6d] | Gyro[X:%6d, Y:%6d, Z:%6d]", 
-                 ax, ay, az, gx, gy, gz);
-
-        // Comprobar el voltaje de la batería y hacer parpadear el LED rojo si es bajo
+        // Leer voltaje de batería
         float battery_voltage = adcGetBatteryVoltage();
-        if (battery_voltage < LOW_BATTERY_VOLTAGE && battery_voltage > 0) {
+        if (battery_voltage < 3.3f && battery_voltage > 0) {
+            // Lógica de parpadeo para batería baja
+            static bool red_led_state = false;
             red_led_state = !red_led_state;
             ledSet(LED_RED, red_led_state);
         } else {
-            // Si la batería está bien, el LED rojo debe estar apagado.
-            ledSet(LED_RED, false);
-            red_led_state = false;
+            // Apaga el LED rojo si la batería está bien y la IMU está calibrada
+            if (imu6IsCalibrated()) {
+                ledSet(LED_RED, false);
+            }
         }
-
+        
         // Espera para controlar la frecuencia del bucle
-        vTaskDelay(pdMS_TO_TICKS(200)); 
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

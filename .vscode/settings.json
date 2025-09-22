@@ -2,6 +2,12 @@
     "files.associations": {
         "cstdlib": "c",
         "imu.h": "c",
-        "i2c_drv.h": "c"
+        "i2c_drv.h": "c",
+        "string.h": "c",
+        "stdbool.h": "c",
+        "mpu6050.h": "c",
+        "ledseq.h": "c",
+        "filter.h": "c",
+        "i2c_dev.h": "c"
     }
 }
