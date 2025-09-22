@@ -1,5 +1,7 @@
 {
     "files.associations": {
-        "cstdlib": "c"
+        "cstdlib": "c",
+        "imu.h": "c",
+        "i2c_drv.h": "c"
     }
 }
