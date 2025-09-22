@@ -8,6 +8,13 @@
         "mpu6050.h": "c",
         "ledseq.h": "c",
         "filter.h": "c",
-        "i2c_dev.h": "c"
+        "i2c_dev.h": "c",
+        "vl53l1x.h": "c",
+        "vl53l1_platform_user_data.h": "c",
+        "vl53l1_ll_def.h": "c",
+        "vl53l1_api.h": "c",
+        "vl53l1_platform.h": "c",
+        "math.h": "c",
+        "stdint.h": "c"
     }
 }
