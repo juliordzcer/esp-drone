@@ -1,41 +1,50 @@
-/**
- *    ||          ____  _ __
- * +------+      / __ )(_) /_______________ _____  ___
- * | 0xBC |     / __  / / __/ ___/ ___/ __ `/_  / / _ \
- * +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
- *  ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
- *
- * Crazyflie control firmware
- *
- * Copyright (C) 2011-2012 Bitcraze AB
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, in version 3.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- * param.h - Crazy parameter system source file.
- */
 #include <string.h>
 #include <errno.h>
 
 /* FreeRtos includes */
-#include "FreeRTOS.h"
-#include "task.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "config.h"
 #include "crtp.h"
 #include "param.h"
 #include "crc.h"
 #include "console.h"
+#include "pid.h"
+#include "controller.h" // Se asume que este header tiene la definición de PidObject
 
+// **Declara las variables globales de los PID** (definidas en controller.c)
+extern PidObject pidRoll;
+extern PidObject pidPitch;
+extern PidObject pidYaw;
+extern PidObject pidRollRate;
+extern PidObject pidPitchRate;
+extern PidObject pidYawRate;
+
+// Define la tabla completa con todos los parámetros
+static const struct param_s allParams[] = {
+    // Grupo: pid_attitude
+    { .type = PARAM_FLOAT, .name = "pid_attitude.roll_kp", .address = &pidRoll.kp },
+    { .type = PARAM_FLOAT, .name = "pid_attitude.roll_ki", .address = &pidRoll.ki },
+    { .type = PARAM_FLOAT, .name = "pid_attitude.roll_kd", .address = &pidRoll.kd },
+    { .type = PARAM_FLOAT, .name = "pid_attitude.pitch_kp", .address = &pidPitch.kp },
+    { .type = PARAM_FLOAT, .name = "pid_attitude.pitch_ki", .address = &pidPitch.ki },
+    { .type = PARAM_FLOAT, .name = "pid_attitude.pitch_kd", .address = &pidPitch.kd },
+    { .type = PARAM_FLOAT, .name = "pid_attitude.yaw_kp", .address = &pidYaw.kp },
+    { .type = PARAM_FLOAT, .name = "pid_attitude.yaw_ki", .address = &pidYaw.ki },
+    { .type = PARAM_FLOAT, .name = "pid_attitude.yaw_kd", .address = &pidYaw.kd },
+
+    // Grupo: pid_rate
+    { .type = PARAM_FLOAT, .name = "pid_rate.roll_kp", .address = &pidRollRate.kp },
+    { .type = PARAM_FLOAT, .name = "pid_rate.roll_ki", .address = &pidRollRate.ki },
+    { .type = PARAM_FLOAT, .name = "pid_rate.roll_kd", .address = &pidRollRate.kd },
+    { .type = PARAM_FLOAT, .name = "pid_rate.pitch_kp", .address = &pidPitchRate.kp },
+    { .type = PARAM_FLOAT, .name = "pid_rate.pitch_ki", .address = &pidPitchRate.ki },
+    { .type = PARAM_FLOAT, .name = "pid_rate.pitch_kd", .address = &pidPitchRate.kd },
+    { .type = PARAM_FLOAT, .name = "pid_rate.yaw_kp", .address = &pidYawRate.kp },
+    { .type = PARAM_FLOAT, .name = "pid_rate.yaw_ki", .address = &pidYawRate.ki },
+    { .type = PARAM_FLOAT, .name = "pid_rate.yaw_kd", .address = &pidYawRate.kd },
+};
 
 #define TOC_CH 0
 #define READ_CH 1
@@ -52,18 +61,13 @@
 static void paramTask(void * prm);
 void paramTOCProcess(int command);
 
-
-//These are set by the Linker
-extern struct param_s _param_start;
-extern struct param_s _param_stop;
-
 //The following two function SHALL NOT be called outside paramTask!
 static void paramWriteProcess(int id, void*);
 static void paramReadProcess(int id);
 static int variableGetIndex(int id);
 
 //Pointer to the parameters list and length of it
-static struct param_s * params;
+static const struct param_s * params;
 static int paramsLen;
 static uint32_t paramsCrc;
 static int paramsCount = 0;
@@ -77,20 +81,20 @@ void paramInit(void)
   if(isInit)
     return;
 
-  params = &_param_start;
-  paramsLen = &_param_stop - &_param_start;
+  // Usa la tabla definida manualmente
+  params = allParams; 
+  paramsLen = sizeof(allParams) / sizeof(allParams[0]);
   paramsCrc = crcSlow(params, paramsLen);
-  
+
   for (i=0; i<paramsLen; i++)
   {
     if(!(params[i].type & PARAM_GROUP)) 
       paramsCount++;
   }
   
-  
   //Start the param task
-	xTaskCreate(paramTask, (const signed char * const)"PARAM",
-				    configMINIMAL_STACK_SIZE, NULL, /*priority*/1, NULL);
+  xTaskCreate(paramTask, "PARAM", 
+            configMINIMAL_STACK_SIZE, NULL, /*priority*/1, NULL);
   
   //TODO: Handle stored parameters!
   
@@ -106,18 +110,18 @@ CRTPPacket p;
 
 void paramTask(void * prm)
 {
-	crtpInitTaskQueue(CRTP_PORT_PARAM);
-	
-	while(1) {
-		crtpReceivePacketBlock(CRTP_PORT_PARAM, &p);
-		
-		if (p.channel==TOC_CH)
-		  paramTOCProcess(p.data[0]);
-	  else if (p.channel==READ_CH)
-		  paramReadProcess(p.data[0]);
-		else if (p.channel==WRITE_CH)
-		  paramWriteProcess(p.data[0], &p.data[1]);
-	}
+  crtpInitTaskQueue(CRTP_PORT_PARAM);
+  
+  while(1) {
+    crtpReceivePacketBlock(CRTP_PORT_PARAM, &p);
+    
+    if (p.channel==TOC_CH)
+      paramTOCProcess(p.data[0]);
+    else if (p.channel==READ_CH)
+      paramReadProcess(p.data[0]);
+    else if (p.channel==WRITE_CH)
+      paramWriteProcess(p.data[0], &p.data[1]);
+  }
 }
 
 void paramTOCProcess(int command)
@@ -192,21 +196,21 @@ static void paramWriteProcess(int ident, void* valptr)
     return;
   }
 
-	if (params[id].type & PARAM_RONLY)
-		return;
+  if (params[id].type & PARAM_RONLY)
+    return;
 
   switch (params[id].type & PARAM_BYTES_MASK)
   {
- 	case PARAM_1BYTE:
- 		*(uint8_t*)params[id].address = *(uint8_t*)valptr;
- 		break;
+  case PARAM_1BYTE:
+    *(uint8_t*)params[id].address = *(uint8_t*)valptr;
+    break;
     case PARAM_2BYTES:
-  	  *(uint16_t*)params[id].address = *(uint16_t*)valptr;
+      *(uint16_t*)params[id].address = *(uint16_t*)valptr;
       break;
- 	case PARAM_4BYTES:
+  case PARAM_4BYTES:
       *(uint32_t*)params[id].address = *(uint32_t*)valptr;
       break;
- 	case PARAM_8BYTES:
+  case PARAM_8BYTES:
       *(uint64_t*)params[id].address = *(uint64_t*)valptr;
       break;
   }
@@ -232,23 +236,22 @@ static void paramReadProcess(int ident)
 
   switch (params[id].type & PARAM_BYTES_MASK)
   {
- 	case PARAM_1BYTE:
-   		memcpy(&p.data[1], params[id].address, sizeof(uint8_t));
-   		p.size = 1+sizeof(uint8_t);
-   		break;
- 		break;
+  case PARAM_1BYTE:
+      memcpy(&p.data[1], params[id].address, sizeof(uint8_t));
+      p.size = 1+sizeof(uint8_t);
+      break;
     case PARAM_2BYTES:
-   		memcpy(&p.data[1], params[id].address, sizeof(uint16_t));
-   		p.size = 1+sizeof(uint16_t);
-   		break;
+      memcpy(&p.data[1], params[id].address, sizeof(uint16_t));
+      p.size = 1+sizeof(uint16_t);
+      break;
     case PARAM_4BYTES:
       memcpy(&p.data[1], params[id].address, sizeof(uint32_t));
-   		p.size = 1+sizeof(uint32_t);
-   		break;
- 	  case PARAM_8BYTES:
+      p.size = 1+sizeof(uint32_t);
+      break;
+    case PARAM_8BYTES:
       memcpy(&p.data[1], params[id].address, sizeof(uint64_t));
-   		p.size = 1+sizeof(uint64_t);
-   		break;
+      p.size = 1+sizeof(uint64_t);
+      break;
   }
   
   crtpSendPacket(&p);
@@ -274,5 +277,3 @@ static int variableGetIndex(int id)
   
   return i;
 }
-
-

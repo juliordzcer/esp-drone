@@ -72,7 +72,7 @@ void adcInit(void)
         .atten = ADC_ATTENUATION,
         .channel = ADC_CHANNEL_VBAT,
         .unit = ADC_UNIT_1,
-        .bit_width = ADC_BITWIDTH, // Usa la resolución correcta para el S2
+        .bit_width = ADC_BITWIDTH,
     };
     adc_continuous_config_t cont_config = {
         .pattern_num = 1,
@@ -86,7 +86,7 @@ void adcInit(void)
     adc_cali_line_fitting_config_t cali_config = {
         .unit_id = ADC_UNIT_1,
         .atten = ADC_ATTENUATION,
-        .bitwidth = ADC_BITWIDTH, // Usa la misma resolución para la calibración
+        .bitwidth = ADC_BITWIDTH,
     };
     ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_config, &cali_handle));
 
@@ -103,7 +103,20 @@ void adcInit(void)
     ESP_LOGI(TAG, "ADC en modo continuo, robusto y calibrado inicializado.");
 }
 
-// Función para obtener el último voltaje medido de forma segura
+bool adcTest(void)
+{
+    adcInit();
+
+    ESP_LOGI(TAG, "Iniciando prueba de ADC...");
+
+    for (int i = 0; i < 5; i++) {
+        float voltage = adcGetBatteryVoltage();
+        ESP_LOGI(TAG, "Voltaje de la batería: %.2fV", voltage);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    return true;
+}
+
 float adcGetBatteryVoltage(void)
 {
     float voltage = 0.0f;
@@ -120,7 +133,7 @@ float adcGetBatteryVoltage(void)
 void adcProcessingTask(void *param)
 {
     uint8_t* result_buffer = NULL;
-    uint32_t ret_num = 0;
+    uint32_t ret_num = SAMPLES_PER_BUFFER; // Corrected to use the expected buffer size
     
     ESP_LOGI(TAG, "Tarea de procesamiento de ADC iniciada.");
 
@@ -128,7 +141,7 @@ void adcProcessingTask(void *param)
         if (xQueueReceive(adc_queue, &result_buffer, portMAX_DELAY)) {
             
             long sum_mv = 0;
-            ESP_ERROR_CHECK(adc_continuous_read(adc_handle, result_buffer, SAMPLES_PER_BUFFER, &ret_num, 0));
+            // The call to adc_continuous_read is removed here!
             uint32_t sample_count = ret_num / SOC_ADC_DIGI_RESULT_BYTES;
 
             for (int i = 0; i < ret_num; i += SOC_ADC_DIGI_RESULT_BYTES) {
@@ -137,7 +150,6 @@ void adcProcessingTask(void *param)
                 
                 adc_cali_raw_to_voltage(cali_handle, p->type1.data, &voltage_mv); 
 
-                // TODO: Verificar por que da la mitad. 
                 voltage_mv *= 2;
 
                 sum_mv += voltage_mv;

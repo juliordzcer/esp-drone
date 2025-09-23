@@ -1,40 +1,19 @@
-/**
- *    ||          ____  _ __
- * +------+      / __ )(_) /_______________ _____  ___
- * | 0xBC |     / __  / / __/ ___/ ___/ __ `/_  / / _ \
- * +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
- *  ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
- *
- * Crazyflie Firmware
- *
- * Copyright (C) 2011-2012 Bitcraze AB
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, in version 3.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- *
- */
-#include "stm32f10x_conf.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "system.h"
 #include "stabilizer.h"
 #include "commander.h"
 #include "controller.h"
-#include "sensfusion6.h"
+#include "sensor_fusion.h"
 #include "imu.h"
 #include "motors.h"
-// #include "log.h"
+#include "log.h"
+#include "esp_log.h"
+
+static const char *TAG = "stabilizer";
 
 /**
  * Defines in what divided update rate should the attitude
@@ -50,8 +29,12 @@
   #define PRIVATE static
 #endif
 
-PRIVATE Axis3f gyro; // Gyro axis data in deg/s
-PRIVATE Axis3f acc;  // Accelerometer axis data in mG
+// Reducir frecuencia IMU para evitar stack overflow
+#define IMU_UPDATE_FREQ   250  // Reducido de 500 a 250 Hz
+#define IMU_UPDATE_DT     (float)(1.0/IMU_UPDATE_FREQ)
+
+PRIVATE Axis3f gyro;
+PRIVATE Axis3f acc;
 
 PRIVATE float eulerRollActual;
 PRIVATE float eulerPitchActual;
@@ -92,6 +75,14 @@ uint32_t motorPowerRear;
 // LOG_ADD(LOG_INT32, m3, &motorPowerRear) 
 // LOG_GROUP_STOP(motor)
 
+typedef struct {
+    float roll;
+    float pitch;
+    float yaw;
+} attitude_s;
+
+attitude_s attitude;
+
 static bool isInit;
 
 static void distributePower(const uint16_t thrust, const int16_t roll,
@@ -105,7 +96,7 @@ void stabilizerInit(void)
     return;
 
   motorsInit();
-  imu6Init();
+  imu_init(); 
   sensfusion6Init();
   controllerInit();
 
@@ -113,10 +104,11 @@ void stabilizerInit(void)
   pitchRateDesired = 0;
   yawRateDesired = 0;
 
-  xTaskCreate(stabilizerTask, (const signed char * const)"STABILIZER",
-              2*configMINIMAL_STACK_SIZE, NULL, /*Piority*/2, NULL);
+  // Aumentar significativamente el stack size
+  xTaskCreate(stabilizerTask, "STABILIZER",
+              4*configMINIMAL_STACK_SIZE, NULL, 2, NULL);
 
-  isInit = TRUE;
+  isInit = true;
 }
 
 bool stabilizerTest(void)
@@ -124,7 +116,7 @@ bool stabilizerTest(void)
   bool pass = true;
 
   pass &= motorsTest();
-  pass &= imu6Test();
+  pass &= imu_test();
   pass &= sensfusion6Test();
   pass &= controllerTest();
 
@@ -134,22 +126,34 @@ bool stabilizerTest(void)
 static void stabilizerTask(void* param)
 {
   uint32_t attitudeCounter = 0;
-  uint32_t lastWakeTime;
+  TickType_t lastWakeTime = xTaskGetTickCount();
+  
+  // Calcular frecuencia con la nueva frecuencia IMU
+  TickType_t xFrequency = pdMS_TO_TICKS(1000 / IMU_UPDATE_FREQ);
+  if (xFrequency == 0) {
+      xFrequency = 1;
+      ESP_LOGW(TAG, "xFrequency era 0, ajustado a 1 tick");
+  }
 
-  vTaskSetApplicationTaskTag(0, (void*)TASK_STABILIZER_ID_NBR);
+  ESP_LOGI(TAG, "Stabilizer task started with frequency: %lu ticks (%d Hz)", 
+           (unsigned long)xFrequency, IMU_UPDATE_FREQ);
 
-  //Wait for the system to be fully started to start stabilization loop
+  // Verificar stack disponible
+  ESP_LOGI(TAG, "Free stack space: %d bytes", uxTaskGetStackHighWaterMark(NULL));
+
+  // Wait for the system to be fully started to start stabilization loop
   systemWaitStart();
 
-  lastWakeTime = xTaskGetTickCount ();
+  ESP_LOGI(TAG, "Stabilizer loop starting...");
 
   while(1)
   {
-    vTaskDelayUntil(&lastWakeTime, F2T(IMU_UPDATE_FREQ));
+    vTaskDelayUntil(&lastWakeTime, xFrequency);
 
-    imu6Read(&gyro, &acc);
+    // Leer IMU
+    imu_read(&gyro, &acc);
 
-    if (imu6IsCalibrated())
+    if (imu_is_calibrated())
     {
       commanderGetRPY(&eulerRollDesired, &eulerPitchDesired, &eulerYawDesired);
       commanderGetRPYType(&rollType, &pitchType, &yawType);
@@ -178,7 +182,6 @@ static void stabilizerTask(void* param)
         yawRateDesired = -eulerYawDesired;
       }
 
-      // TODO: Investigate possibility to subtract gyro drift.
       controllerCorrectRatePID(gyro.x, -gyro.y, gyro.z,
                                rollRateDesired, pitchRateDesired, yawRateDesired);
 
@@ -202,17 +205,16 @@ static void stabilizerTask(void* param)
         distributePower(0, 0, 0, 0);
         controllerResetAllPID();
       }
-#if 0
-     static int i = 0;
-      if (++i > 19)
-      {
-        uartPrintf("%i, %i, %i\n",
-            (int32_t)(eulerRollActual*100),
-            (int32_t)(eulerPitchActual*100),
-            (int32_t)(eulerYawActual*100));
-        i = 0;
-      }
-#endif
+    }
+
+    // Monitorear stack periódicamente (cada 1000 iteraciones)
+    static uint32_t stackCheckCounter = 0;
+    if (++stackCheckCounter >= 1000) {
+        UBaseType_t freeStack = uxTaskGetStackHighWaterMark(NULL);
+        if (freeStack < 100) {
+            ESP_LOGW(TAG, "Low stack space: %d bytes", freeStack);
+        }
+        stackCheckCounter = 0;
     }
   }
 }
@@ -221,13 +223,13 @@ static void distributePower(const uint16_t thrust, const int16_t roll,
                             const int16_t pitch, const int16_t yaw)
 {
 #ifdef QUAD_FORMATION_X
-  roll = roll >> 1;
-  pitch = pitch >> 1;
-  motorPowerLeft =  limitThrust(thrust + roll + pitch - yaw);
-  motorPowerRight = limitThrust(thrust - roll - pitch - yaw);
-  motorPowerFront = limitThrust(thrust - roll + pitch + yaw);
-  motorPowerRear =  limitThrust(thrust + roll - pitch + yaw);
-#else // QUAD_FORMATION_NORMAL
+  int16_t temp_roll = roll >> 1;
+  int16_t temp_pitch = pitch >> 1;
+  motorPowerLeft =  limitThrust(thrust + temp_roll + temp_pitch - yaw);
+  motorPowerRight = limitThrust(thrust - temp_roll - temp_pitch - yaw);
+  motorPowerFront = limitThrust(thrust - temp_roll + temp_pitch + yaw);
+  motorPowerRear =  limitThrust(thrust + temp_roll - temp_pitch + yaw);
+#else
   motorPowerLeft =  limitThrust(thrust + roll - yaw);
   motorPowerRight = limitThrust(thrust - roll - yaw);
   motorPowerFront = limitThrust(thrust + pitch + yaw);
@@ -253,4 +255,3 @@ static uint16_t limitThrust(int32_t value)
 
   return (uint16_t)value;
 }
-

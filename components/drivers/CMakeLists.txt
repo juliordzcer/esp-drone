@@ -1,3 +1,4 @@
+# components/drivers/CMakeLists.txt
 idf_component_register(SRCS "src/motors.c"
                             "src/led.c"
                             "src/adc.c"

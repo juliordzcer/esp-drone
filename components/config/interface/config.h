@@ -1,6 +1,6 @@
 #ifndef CONFIG_H_
 #define CONFIG_H_
-#include "nrf24l01.h"
+// #include "nrf24l01.h"
 
 #define CONFIG_BLOCK_ADDRESS 0x1FC00
 

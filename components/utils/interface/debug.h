@@ -32,11 +32,12 @@
 // --- Puente de compatibilidad ---
 // Define automáticamente la variable TAG que necesita esp_log,
 // usando el DEBUG_MODULE que ya tienes definido en tu código.
-#ifdef DEBUG_MODULE
-  static const char *TAG = DEBUG_MODULE;
-#else
-  static const char *TAG = "NO_MODULE"; // Un valor por defecto si se te olvida definir DEBUG_MODULE
-#endif
+// #ifdef DEBUG_MODULE
+//   static const char *TAG = DEBUG_MODULE;
+// #else
+//   static const char *TAG = "NO_MODULE"; // Un valor por defecto si se te olvida definir DEBUG_MODULE
+// #endif
+#define TAG DEBUG_MODULE
 
 
 // --- Definición de las Macros ---

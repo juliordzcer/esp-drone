@@ -1,3 +1,4 @@
+# components/utils/CMakeLists.txt
 idf_component_register(SRCS 
                             "src/cfassert.c"
                             "src/configblock.c"
@@ -7,5 +8,9 @@ idf_component_register(SRCS
                             "src/eprintf.c"
                             "src/filter.c"
                             "src/fp16.c"
+                            "src/version.c"
                        INCLUDE_DIRS "interface"
-                       REQUIRES modules)
+                       # Remove `REQUIRES modules` to break the circular dependency.
+                       # The main component should handle all top-level dependencies.
+                       REQUIRES modules  )
+                       # )

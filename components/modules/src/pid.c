@@ -24,15 +24,18 @@
  *
  * pid.c - implementation of the PID regulator
  */
-#include "stm32f10x_conf.h"
+// #include "stm32f10x_conf.h"
 #include <math.h>
 
-#include "FreeRTOS.h"
-#include "task.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "pid.h"
 #include "imu.h"
 #include "led.h"
 #include "motors.h"
+
+#define IMU_UPDATE_FREQ   500
+#define IMU_UPDATE_DT     (float)(1.0/IMU_UPDATE_FREQ)
 
 void pidInit(PidObject* pid, const float desired, const float kp,
              const float ki, const float kd)
@@ -113,11 +116,11 @@ float pidGetDesired(PidObject* pid)
 
 bool pidIsActive(PidObject* pid)
 {
-  bool isActive = TRUE;
+  bool isActive = true;
 
   if (pid->kp < 0.0001 && pid->ki < 0.0001 && pid->kd < 0.0001)
   {
-    isActive = FALSE;
+    isActive = false;
   }
 
   return isActive;

@@ -38,6 +38,12 @@ typedef struct {
 void ledseqInit(void);
 
 /**
+ * @brief Ejecuta una prueba del módulo de secuencia de LEDs.
+ * @return true si la prueba se ejecuta, false en caso de fallo.
+ */
+bool ledseqTest(void);
+
+/**
  * @brief Inicia la ejecución de una secuencia en un LED específico.
  *
  * @param led El LED a controlar (LED_RED, LED_GREEN, LED_BLUE).

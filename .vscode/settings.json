@@ -16,6 +16,19 @@
         "vl53l1_platform.h": "c",
         "math.h": "c",
         "stdint.h": "c",
-        "sensor_fusion.h": "c"
+        "sensor_fusion.h": "c",
+        "adc.h": "c",
+        "system.h": "c",
+        "config.h": "c",
+        "errno.h": "c",
+        "pid.h": "c",
+        "compare": "c",
+        "console.h": "c",
+        "stabilizer.h": "c",
+        "version.h": "c",
+        "commander.h": "c",
+        "led.h": "c",
+        "configblock.h": "c",
+        "log.h": "c"
     }
 }

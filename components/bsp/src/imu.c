@@ -11,6 +11,8 @@
 // =================================================================
 // ============== PARÁMETROS DE CONFIGURACIÓN Y AJUSTE =============
 // =================================================================
+#define IMU_UPDATE_FREQ   500
+#define IMU_UPDATE_DT     (float)(1.0/IMU_UPDATE_FREQ)
 
 // --- Configuración del Sensor MPU-6050 ---
 #define IMU_GYRO_FS_CFG         MPU6050_GYRO_FS_2000

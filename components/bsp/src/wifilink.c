@@ -49,7 +49,7 @@ static int sock = -1;
 static struct sockaddr_in server_addr;
 static bool is_connected = false;
 static uint32_t lastPacketTimestamp = 0;
- EventGroupHandle_t wifi_event_group;
+EventGroupHandle_t wifi_event_group; // Mantenlo aquí para que sea accesible
 static esp_netif_ip_info_t ip_info;
 
 // --- Prototipos de funciones internas ---
@@ -187,13 +187,13 @@ static void wifilinkTask(void *arg) {
             CRTPPacket packet;
             packet.size = len - 1;
             if (packet.size > 0) {
-                memcpy(packet.data, rx_buffer + 1, packet.size);
+                memcpy(packet.data + 1, rx_buffer, packet.size);
             }
             packet.port = (rx_buffer[0] >> 4) & 0x0F;
             packet.channel = rx_buffer[0] & 0x0F;
 
             // Guardar dirección del cliente para responder
-            memcpy(&server_addr, &source_addr, sizeof(server_addr));
+            memcpy(&server_addr, &source_addr, sizeof(source_addr));
 
             if (xQueueSend(rxQueue, &packet, pdMS_TO_TICKS(10)) != pdPASS) {
                 ESP_LOGW(TAG, "La cola de recepción está llena. Paquete descartado.");
@@ -346,4 +346,31 @@ void wifilinkReInit(void) {
     
     vTaskDelay(pdMS_TO_TICKS(2000));
     wifilinkInit();
+}
+
+/**
+ * @brief Espera a que la conexión Wi-Fi se establezca.
+ * @param timeout Tiempo máximo en ticks del sistema para esperar.
+ * @return Verdadero si la conexión fue exitosa, falso si falló o hubo timeout.
+ */
+bool wifilinkWaitForConnection(TickType_t timeout) {
+    if (!wifi_event_group) {
+        ESP_LOGE(TAG, "El EventGroup de Wi-Fi no ha sido creado.");
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Esperando conexión Wi-Fi (timeout: %d ms)...", (int)pdTICKS_TO_MS(timeout));
+    EventBits_t bits = xEventGroupWaitBits(wifi_event_group,
+                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                           pdFALSE, // No limpiar bits al salir
+                                           pdFALSE, // Esperar al menos uno de los bits
+                                           timeout);
+
+    if (bits & WIFI_CONNECTED_BIT) {
+        ESP_LOGI(TAG, "✅ Conexión Wi-Fi exitosa.");
+        return true;
+    } else {
+        ESP_LOGE(TAG, "❌ Fallo en la conexión Wi-Fi por timeout.");
+        return false;
+    }
 }

@@ -25,8 +25,8 @@
  */
 // #include "stm32f10x_conf.h"
 
-#include "FreeRTOS.h"
-#include "task.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "commander.h"
 #include "crtp.h"
@@ -62,8 +62,8 @@ void commanderInit(void)
   crtpRegisterPortCB(CRTP_PORT_COMMANDER, commanderCrtpCB);
 
   lastUpdate = xTaskGetTickCount();
-  isInactive = TRUE;
-  isInit = TRUE;
+  isInactive = true;
+  isInit = true;
 }
 
 bool commanderTest(void)
@@ -95,11 +95,11 @@ static void commanderWatchdog(void)
   if (ticktimeSinceUpdate > COMMANDER_WDT_TIMEOUT_SHUTDOWN)
   {
     targetVal[usedSide].thrust = 0;
-    isInactive = TRUE;
+    isInactive = true;
   }
   else
   {
-    isInactive = FALSE;
+    isInactive = false;
   }
 }
 

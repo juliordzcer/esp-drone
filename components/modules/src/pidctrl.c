@@ -1,10 +1,4 @@
 /**
- *    ||          ____  _ __                           
- * +------+      / __ )(_) /_______________ _____  ___ 
- * | 0xBC |     / __  / / __/ ___/ ___/ __ `/_  / / _ \
- * +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
- *  ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
- *
  * Crazyflie control firmware
  *
  * Copyright (C) 2011-2012 Bitcraze AB
@@ -25,8 +19,8 @@
  */
  
 /* FreeRtos includes */
-#include "FreeRTOS.h"
-#include "task.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "crtp.h"
 #include "pidctrl.h"
@@ -40,7 +34,7 @@ void pidCrtlTask(void *param);
 
 void pidCtrlInit()
 {
-  xTaskCreate(pidCrtlTask, (const signed char * const)"PIDCrtl",
+  xTaskCreate(pidCrtlTask, "PIDCrtl", // Corrected: removed the explicit cast
               configMINIMAL_STACK_SIZE, NULL, /*priority*/2, NULL);
   crtpInitTaskQueue(6);
 }
@@ -71,7 +65,7 @@ void pidCrtlTask(void *param)
   }  __attribute__((packed));
   struct pidValues *pPid;
 
-  while (TRUE)
+  while (true)
   {
     if (crtpReceivePacketBlock(6, &p) == pdTRUE)
     {
@@ -108,4 +102,3 @@ void pidCrtlTask(void *param)
     }
   }
 }
-

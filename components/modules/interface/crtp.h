@@ -1,33 +1,8 @@
-/**
- *    ||          ____  _ __
- * +------+      / __ )(_) /_______________ _____  ___
- * | 0xBC |     / __  / / __/ ___/ ___/ __ `/_  / / _ \
- * +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
- *  ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
- *
- * Crazyflie control firmware
- *
- * Copyright (C) 2011-2012 Bitcraze AB
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, in version 3.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- * crtp.h - CrazyRealtimeTransferProtocol stack
- */
-
 #ifndef CRTP_H_
 #define CRTP_H_
 
 #include <stdbool.h>
+
 #define M2T(X) ((unsigned int)(X)/ portTICK_PERIOD_MS) //ms to tick
 
 #define CRTP_MAX_DATA_SIZE 30
@@ -42,6 +17,7 @@ typedef enum {
   CRTP_PORT_COMMANDER   = 0x03,
   CRTP_PORT_LOG         = 0x05,
   CRTP_PORT_LINK        = 0x0F,
+  CRTP_PORT_INFO        = 0x08,
 } CRTPPort;
 
 typedef struct _CRTPPacket
