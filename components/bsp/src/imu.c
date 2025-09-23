@@ -1,80 +1,83 @@
+#include "imu.h"
 #include <string.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "imu.h"
 #include "i2c_dev.h"
 #include "mpu6050.h"
-#include "configblock.h"
+#include "filter.h" 
 
-#ifdef LEDSEQ_ENABLED
-#include "ledseq.h"
-#endif
+// =================================================================
+// ============== PARÁMETROS DE CONFIGURACIÓN Y AJUSTE =============
+// =================================================================
 
-static const char* TAG = "IMU";
+// --- Configuración del Sensor MPU-6050 ---
+#define IMU_GYRO_FS_CFG         MPU6050_GYRO_FS_2000
+#define IMU_DEG_PER_LSB_CFG     MPU6050_DEG_PER_LSB_2000
+#define IMU_ACCEL_FS_CFG        MPU6050_ACCEL_FS_8
+#define IMU_G_PER_LSB_CFG       MPU6050_G_PER_LSB_8
 
-#define IMU_GYRO_FS_CFG       MPU6050_GYRO_FS_2000
-#define IMU_DEG_PER_LSB_CFG   MPU6050_DEG_PER_LSB_2000
-#define IMU_ACCEL_FS_CFG      MPU6050_ACCEL_FS_8
-#define IMU_G_PER_LSB_CFG     MPU6050_G_PER_LSB_8
-#define IMU_1G_RAW            (int16_t)(1.0f / MPU6050_G_PER_LSB_8)
+// --- Parámetros de Calibración ---
+// Aumenta para más precisión (y más tiempo de espera), disminuye para calibrar más rápido.
+#define GYRO_BIAS_SAMPLES       128   // Número de muestras para el giroscopio
+#define ACCEL_SCALE_SAMPLES     200   // Número de muestras para el acelerómetro
+#define GYRO_VARIANCE_THRESHOLD 5000  // Umbral de estabilidad (más bajo es más estricto)
 
-#define IMU_STARTUP_DELAY_MS  1000
-#define GYRO_MIN_BIAS_TIMEOUT_MS 1000
-#define IMU_NBR_OF_BIAS_SAMPLES  64
-#define GYRO_VARIANCE_BASE       4000
-#define GYRO_VARIANCE_THRESHOLD  GYRO_VARIANCE_BASE
+// --- Parámetros del Filtro de Segundo Orden ---
+#define IMU_SAMPLE_RATE_HZ      500   // Frecuencia de muestreo del IMU (ajustar si se cambia el DLPF)
+#define GYRO_LPF_CUTOFF_HZ      80    // Frecuencia de corte para el giroscopio
+#define ACCEL_LPF_CUTOFF_HZ     30    // Frecuencia de corte para el acelerómetro
 
-typedef struct {
-    Axis3i16 bias;
-    bool isBiasValueFound;
-    bool isBufferFilled;
-    Axis3i16* bufHead;
-    Axis3i16 buffer[IMU_NBR_OF_BIAS_SAMPLES];
-} BiasObj;
+// =================================================================
+// =================== FIN DE LA CONFIGURACIÓN =====================
+// =================================================================
 
-static BiasObj gyroBias = {0};
-static BiasObj accelBias = {0};
-static int32_t varianceSampleTime = 0;
-static Axis3i16 gyroMpu = {0};
-static Axis3i16 accelMpu = {0};
-static Axis3i16 accelLPF = {0};
-static Axis3i16 accelLPFAligned = {0};
-static Axis3i32 accelStoredFilterValues = {0};
-static uint8_t imuAccLpfAttFactor = IMU_ACC_IIR_LPF_ATT_FACTOR;
+static const char* TAG = "IMU_IMPROVED";
 
-static float cosPitch = 0.0f;
-static float sinPitch = 0.0f;
-static float cosRoll = 0.0f;
-static float sinRoll = 0.0f;
+// Estructuras internas
+typedef struct { int16_t x, y, z; } Axis3i16;
+typedef struct { int32_t x, y, z; } Axis3i32;
 
+// Variables estáticas del driver
 static imu_state_t imuState = IMU_STATE_UNINITIALIZED;
 static bool isI2cInitialized = false;
 
-static void imuBiasInit(BiasObj* bias);
-static bool imuCalculateVarianceAndMean(BiasObj* bias, Axis3i32* var, Axis3i32* mean);
-static bool imuCalculateBiasMean(BiasObj* bias, Axis3i32* mean);
-static bool imuFindBiasValue(BiasObj* bias);
-static void imuAddBiasValue(BiasObj* bias, Axis3i16* data);
-static void imuAccIIRLPFilter(Axis3i16* in, Axis3i16* out, Axis3i32* stored, int att);
-static void imuAccAlignToGravity(Axis3i16* in, Axis3i16* out);
-static bool imuConfigureMpu6050(void);
+// Variables de calibración
+static Axis3f gyroBias = {0};
+static float accelScale = 1.0f;
+static bool gyroBiasFound = false;
+static bool accelScaleFound = false;
 
-bool imu6Init(void) {
-    if (imuState >= IMU_STATE_INITIALIZED) {
-        ESP_LOGW(TAG, "IMU already initialized");
+// Búfer para la calibración del giroscopio
+static Axis3i16 gyroBuffer[GYRO_BIAS_SAMPLES];
+static uint32_t gyroBufferIndex = 0;
+static bool gyroBufferFilled = false;
+
+// Acumulador para la calibración del acelerómetro
+static float accelScaleSum = 0;
+static uint32_t accelScaleSampleCount = 0;
+
+// Filtros de segundo orden
+static lpf2pData gyroLpf[3];
+static lpf2pData accLpf[3];
+
+// Prototipos de funciones internas
+static bool configure_mpu6050(void);
+static void calculate_gyro_bias(void);
+static void calculate_accel_scale(int16_t ax, int16_t ay, int16_t az);
+
+bool imu_init(void) {
+    if (imuState != IMU_STATE_UNINITIALIZED) {
+        ESP_LOGW(TAG, "IMU ya inicializado.");
         return true;
     }
     
-    ESP_LOGI(TAG, "Initializing IMU...");
-    imuState = IMU_STATE_CALIBRATING;
-
-    vTaskDelay(pdMS_TO_TICKS(IMU_STARTUP_DELAY_MS));
-
+    ESP_LOGI(TAG, "Inicializando IMU (versión mejorada)...");
+    
     if (!isI2cInitialized) {
         if (!i2cdevInit(I2C0_DEV)) {
-            ESP_LOGE(TAG, "I2C initialization failed");
+            ESP_LOGE(TAG, "Fallo al inicializar I2C.");
             imuState = IMU_STATE_ERROR;
             return false;
         }
@@ -84,238 +87,182 @@ bool imu6Init(void) {
     mpu6050Init(I2C0_DEV);
 
     if (!mpu6050TestConnection()) {
-        ESP_LOGE(TAG, "MPU6050 connection failed");
+        ESP_LOGE(TAG, "Fallo en la conexión con MPU6050.");
         imuState = IMU_STATE_ERROR;
         return false;
     }
-    ESP_LOGI(TAG, "MPU6050 connected");
+    ESP_LOGI(TAG, "MPU6050 conectado.");
 
-    if (!imuConfigureMpu6050()) {
-        ESP_LOGE(TAG, "MPU6050 configuration failed");
+    if (!configure_mpu6050()) {
+        ESP_LOGE(TAG, "Fallo al configurar MPU6050.");
         imuState = IMU_STATE_ERROR;
         return false;
     }
 
-    imuBiasInit(&gyroBias);
-    imuBiasInit(&accelBias);
-    varianceSampleTime = -GYRO_MIN_BIAS_TIMEOUT_MS + 1;
-
-    float pitchRad = configblockGetCalibPitch() * (float)M_PI / 180.0f;
-    float rollRad = configblockGetCalibRoll() * (float)M_PI / 180.0f;
-    cosPitch = cosf(pitchRad);
-    sinPitch = sinf(pitchRad);
-    cosRoll = cosf(rollRad);
-    sinRoll = sinf(rollRad);
-
-    imuState = IMU_STATE_INITIALIZED;
-    ESP_LOGI(TAG, "IMU initialized successfully");
-    return true;
-}
-
-static bool imuConfigureMpu6050(void) {
-    mpu6050Reset();
-    vTaskDelay(pdMS_TO_TICKS(50));
+    // Inicializar los filtros
+    for (int i = 0; i < 3; i++) {
+        lpf2pInit(&gyroLpf[i], IMU_SAMPLE_RATE_HZ, GYRO_LPF_CUTOFF_HZ);
+        lpf2pInit(&accLpf[i], IMU_SAMPLE_RATE_HZ, ACCEL_LPF_CUTOFF_HZ);
+    }
     
-    mpu6050SetSleepEnabled(false);
-    mpu6050SetTempSensorEnabled(true);
-    mpu6050SetIntEnabled(false);
-    mpu6050SetI2CBypassEnabled(true);
-    mpu6050SetClockSource(MPU6050_CLOCK_PLL_XGYRO);
-    mpu6050SetFullScaleGyroRange(IMU_GYRO_FS_CFG);
-    mpu6050SetFullScaleAccelRange(IMU_ACCEL_FS_CFG);
-
-#ifdef IMU_MPU6050_DLPF_256HZ
-    mpu6050SetRate(15);
-    mpu6050SetDLPFMode(MPU6050_DLPF_BW_256);
-#else
-    mpu6050SetRate(1);
-    mpu6050SetDLPFMode(MPU6050_DLPF_BW_188);
-#endif
-
+    imuState = IMU_STATE_INITIALIZED;
+    ESP_LOGI(TAG, "IMU inicializado y listo para calibrar.");
     return true;
 }
 
-bool imu6Test(void) {
-    if (imuState == IMU_STATE_UNINITIALIZED) {
-        ESP_LOGE(TAG, "IMU not initialized");
-        return false;
-    }
-
-    if (imuState == IMU_STATE_ERROR) {
-        ESP_LOGE(TAG, "IMU in error state");
-        return false;
-    }
-
+bool imu_test(void) {
+    if (imuState < IMU_STATE_INITIALIZED) return false;
     return mpu6050SelfTest();
 }
 
-void imu6Read(Axis3f* gyroOut, Axis3f* accOut) {
-    if (imuState < IMU_STATE_INITIALIZED || imuState == IMU_STATE_ERROR) {
-        if (gyroOut) memset(gyroOut, 0, sizeof(Axis3f));
-        if (accOut) memset(accOut, 0, sizeof(Axis3f));
+bool imu_is_calibrated(void) {
+    return gyroBiasFound && accelScaleFound;
+}
+
+void imu_read(Axis3f* gyro, Axis3f* acc) {
+    if (imuState < IMU_STATE_INITIALIZED) {
+        memset(gyro, 0, sizeof(Axis3f));
+        memset(acc, 0, sizeof(Axis3f));
         return;
     }
 
-    mpu6050GetMotion6(&accelMpu.x, &accelMpu.y, &accelMpu.z, 
-                     &gyroMpu.x, &gyroMpu.y, &gyroMpu.z);
+    Axis3i16 accelRaw, gyroRaw;
+    mpu6050GetMotion6(&accelRaw.x, &accelRaw.y, &accelRaw.z, 
+                     &gyroRaw.x, &gyroRaw.y, &gyroRaw.z);
 
-    imuAddBiasValue(&gyroBias, &gyroMpu);
-    
-    if (!accelBias.isBiasValueFound) {
-        imuAddBiasValue(&accelBias, &accelMpu);
-    }
+    // --- Lógica de Calibración (se ejecuta hasta que se completa) ---
+    if (!imu_is_calibrated()) {
+        imuState = IMU_STATE_CALIBRATING;
 
-    if (!gyroBias.isBiasValueFound && imuFindBiasValue(&gyroBias)) {
-        imuState = IMU_STATE_CALIBRATED;
-        ESP_LOGI(TAG, "Gyroscope calibrated");
-#ifdef LEDSEQ_ENABLED
-        ledseqRun(LED_RED, seq_calibrated);
-#endif
-    }
+        // 1. Calibrar giroscopio
+        if (!gyroBiasFound) {
+            gyroBuffer[gyroBufferIndex++] = gyroRaw;
+            if (gyroBufferIndex >= GYRO_BIAS_SAMPLES) {
+                gyroBufferIndex = 0;
+                gyroBufferFilled = true;
+            }
+            if (gyroBufferFilled) {
+                calculate_gyro_bias();
+            }
+        }
 
-#ifdef IMU_TAKE_ACCEL_BIAS
-    if (gyroBias.isBiasValueFound && !accelBias.isBiasValueFound) {
-        Axis3i32 mean;
-        if (imuCalculateBiasMean(&accelBias, &mean)) {
-            accelBias.bias = (Axis3i16){mean.x, mean.y, mean.z - IMU_1G_RAW};
-            accelBias.isBiasValueFound = true;
-            ESP_LOGI(TAG, "Accelerometer calibrated");
+        // 2. Calibrar acelerómetro
+        if (!accelScaleFound) {
+            calculate_accel_scale(accelRaw.x, accelRaw.y, accelRaw.z);
+        }
+
+        // 3. Comprobar si hemos terminado
+        if (imu_is_calibrated()) {
+            imuState = IMU_STATE_CALIBRATED;
+            ESP_LOGI(TAG, "¡Calibración de Giroscopio y Acelerómetro completada!");
+            ESP_LOGI(TAG, "Gyro Bias [x,y,z]: %.2f, %.2f, %.2f", gyroBias.x, gyroBias.y, gyroBias.z);
+            ESP_LOGI(TAG, "Accel Scale Factor: %.4f", accelScale);
         }
     }
-#endif
 
-    imuAccIIRLPFilter(&accelMpu, &accelLPF, &accelStoredFilterValues, imuAccLpfAttFactor);
-    imuAccAlignToGravity(&accelLPF, &accelLPFAligned);
+    // --- Aplicar Correcciones y Filtros ---
+    Axis3f tempGyro, tempAcc;
 
-    if (gyroOut) {
-        gyroOut->x = (gyroMpu.x - gyroBias.bias.x) * IMU_DEG_PER_LSB_CFG;
-        gyroOut->y = (gyroMpu.y - gyroBias.bias.y) * IMU_DEG_PER_LSB_CFG;
-        gyroOut->z = (gyroMpu.z - gyroBias.bias.z) * IMU_DEG_PER_LSB_CFG;
+    // 1. Corregir y escalar Giroscopio
+    tempGyro.x = (gyroRaw.x - gyroBias.x) * IMU_DEG_PER_LSB_CFG;
+    tempGyro.y = (gyroRaw.y - gyroBias.y) * IMU_DEG_PER_LSB_CFG;
+    tempGyro.z = (gyroRaw.z - gyroBias.z) * IMU_DEG_PER_LSB_CFG;
+
+    // 2. Corregir y escalar Acelerómetro
+    tempAcc.x = accelRaw.x * IMU_G_PER_LSB_CFG / accelScale;
+    tempAcc.y = accelRaw.y * IMU_G_PER_LSB_CFG / accelScale;
+    tempAcc.z = accelRaw.z * IMU_G_PER_LSB_CFG / accelScale;
+
+    // 3. Aplicar filtros de segundo orden y asignar solo si los punteros no son nulos
+    if (gyro) {
+        gyro->x = lpf2pApply(&gyroLpf[0], tempGyro.x);
+        gyro->y = lpf2pApply(&gyroLpf[1], tempGyro.y);
+        gyro->z = lpf2pApply(&gyroLpf[2], tempGyro.z);
     }
 
-    if (accOut) {
-        accOut->x = (accelLPFAligned.x - accelBias.bias.x) * IMU_G_PER_LSB_CFG;
-        accOut->y = (accelLPFAligned.y - accelBias.bias.y) * IMU_G_PER_LSB_CFG;
-        accOut->z = (accelLPFAligned.z - accelBias.bias.z) * IMU_G_PER_LSB_CFG;
+    if (acc) {
+        acc->x = lpf2pApply(&accLpf[0], tempAcc.x);
+        acc->y = lpf2pApply(&accLpf[1], tempAcc.y);
+        acc->z = lpf2pApply(&accLpf[2], tempAcc.z);
     }
 }
 
-bool imu6IsCalibrated(void) {
-    bool calibrated = gyroBias.isBiasValueFound;
-#ifdef IMU_TAKE_ACCEL_BIAS
-    calibrated &= accelBias.isBiasValueFound;
-#endif
-    return calibrated && (imuState >= IMU_STATE_CALIBRATED);
-}
+// --- Funciones Internas ---
 
-imu_state_t imu6GetState(void) {
-    return imuState;
-}
-
-const char* imu6GetStateString(void) {
-    static const char* states[] = {
-        "UNINITIALIZED", "INITIALIZED", "CALIBRATING", "CALIBRATED", "ERROR"
-    };
-    return (imuState < sizeof(states)/sizeof(states[0])) ? states[imuState] : "UNKNOWN";
-}
-
-static void imuBiasInit(BiasObj* bias) {
-    if (!bias) return;
-    memset(bias, 0, sizeof(BiasObj));
-    bias->bufHead = bias->buffer;
-}
-
-static bool imuCalculateVarianceAndMean(BiasObj* bias, Axis3i32* var, Axis3i32* mean) {
-    if (!bias || !var || !mean || !bias->isBufferFilled) return false;
-
-    int32_t sum[3] = {0};
+static void calculate_gyro_bias(void) {
     int64_t sumSq[3] = {0};
+    Axis3i32 sum = {0};
 
-    for (uint32_t i = 0; i < IMU_NBR_OF_BIAS_SAMPLES; i++) {
-        sum[0] += bias->buffer[i].x;
-        sum[1] += bias->buffer[i].y;
-        sum[2] += bias->buffer[i].z;
-        sumSq[0] += (int64_t)bias->buffer[i].x * bias->buffer[i].x;
-        sumSq[1] += (int64_t)bias->buffer[i].y * bias->buffer[i].y;
-        sumSq[2] += (int64_t)bias->buffer[i].z * bias->buffer[i].z;
+    for (int i = 0; i < GYRO_BIAS_SAMPLES; i++) {
+        sum.x += gyroBuffer[i].x;
+        sum.y += gyroBuffer[i].y;
+        sum.z += gyroBuffer[i].z;
+        sumSq[0] += (int64_t)gyroBuffer[i].x * gyroBuffer[i].x;
+        sumSq[1] += (int64_t)gyroBuffer[i].y * gyroBuffer[i].y;
+        sumSq[2] += (int64_t)gyroBuffer[i].z * gyroBuffer[i].z;
     }
-
-    var->x = (sumSq[0] - ((int64_t)sum[0] * sum[0]) / IMU_NBR_OF_BIAS_SAMPLES);
-    var->y = (sumSq[1] - ((int64_t)sum[1] * sum[1]) / IMU_NBR_OF_BIAS_SAMPLES);
-    var->z = (sumSq[2] - ((int64_t)sum[2] * sum[2]) / IMU_NBR_OF_BIAS_SAMPLES);
-
-    mean->x = sum[0] / IMU_NBR_OF_BIAS_SAMPLES;
-    mean->y = sum[1] / IMU_NBR_OF_BIAS_SAMPLES;
-    mean->z = sum[2] / IMU_NBR_OF_BIAS_SAMPLES;
-
-    return true;
-}
-
-static bool imuCalculateBiasMean(BiasObj* bias, Axis3i32* mean) {
-    if (!bias || !mean || !bias->isBufferFilled) return false;
-
-    int32_t sum[3] = {0};
-    for (uint32_t i = 0; i < IMU_NBR_OF_BIAS_SAMPLES; i++) {
-        sum[0] += bias->buffer[i].x;
-        sum[1] += bias->buffer[i].y;
-        sum[2] += bias->buffer[i].z;
-    }
-
-    mean->x = sum[0] / IMU_NBR_OF_BIAS_SAMPLES;
-    mean->y = sum[1] / IMU_NBR_OF_BIAS_SAMPLES;
-    mean->z = sum[2] / IMU_NBR_OF_BIAS_SAMPLES;
-
-    return true;
-}
-
-static void imuAddBiasValue(BiasObj* bias, Axis3i16* data) {
-    if (!bias || !data) return;
-
-    *bias->bufHead = *data;
-    bias->bufHead++;
-
-    if (bias->bufHead >= &bias->buffer[IMU_NBR_OF_BIAS_SAMPLES]) {
-        bias->bufHead = bias->buffer;
-        bias->isBufferFilled = true;
-    }
-}
-
-static bool imuFindBiasValue(BiasObj* bias) {
-    if (!bias || !bias->isBufferFilled) return false;
-
-    Axis3i32 variance, mean;
-    if (!imuCalculateVarianceAndMean(bias, &variance, &mean)) return false;
+    
+    Axis3i32 variance;
+    variance.x = (sumSq[0] - ((int64_t)sum.x * sum.x) / GYRO_BIAS_SAMPLES);
+    variance.y = (sumSq[1] - ((int64_t)sum.y * sum.y) / GYRO_BIAS_SAMPLES);
+    variance.z = (sumSq[2] - ((int64_t)sum.z * sum.z) / GYRO_BIAS_SAMPLES);
 
     if (variance.x < GYRO_VARIANCE_THRESHOLD &&
         variance.y < GYRO_VARIANCE_THRESHOLD &&
-        variance.z < GYRO_VARIANCE_THRESHOLD &&
-        (varianceSampleTime + GYRO_MIN_BIAS_TIMEOUT_MS < xTaskGetTickCount())) {
-        varianceSampleTime = xTaskGetTickCount();
-        bias->bias = (Axis3i16){mean.x, mean.y, mean.z};
-        bias->isBiasValueFound = true;
-        return true;
+        variance.z < GYRO_VARIANCE_THRESHOLD)
+    {
+        gyroBias.x = (float)sum.x / GYRO_BIAS_SAMPLES;
+        gyroBias.y = (float)sum.y / GYRO_BIAS_SAMPLES;
+        gyroBias.z = (float)sum.z / GYRO_BIAS_SAMPLES;
+        gyroBiasFound = true;
     }
-
-    return false;
 }
 
-static void imuAccIIRLPFilter(Axis3i16* in, Axis3i16* out, Axis3i32* stored, int att) {
-    if (!in || !out || !stored) return;
+static void calculate_accel_scale(int16_t ax, int16_t ay, int16_t az) {
+    if (accelScaleFound) return;
     
-    out->x = iirLPFilterSingle(in->x, att, &stored->x);
-    out->y = iirLPFilterSingle(in->y, att, &stored->y);
-    out->z = iirLPFilterSingle(in->z, att, &stored->z);
+    // Solo acumular si el giroscopio ya está estable (mejora la calidad)
+    if (gyroBiasFound) {
+        float magnitude = sqrtf(powf(ax * IMU_G_PER_LSB_CFG, 2) + 
+                                powf(ay * IMU_G_PER_LSB_CFG, 2) + 
+                                powf(az * IMU_G_PER_LSB_CFG, 2));
+        accelScaleSum += magnitude;
+        accelScaleSampleCount++;
+
+        if (accelScaleSampleCount >= ACCEL_SCALE_SAMPLES) {
+            accelScale = accelScaleSum / ACCEL_SCALE_SAMPLES;
+            if (accelScale < 0.9f || accelScale > 1.1f) {
+                ESP_LOGW(TAG, "Calibracion de escala del Accel fuera de rango (%.2f). Usando 1.0", accelScale);
+                accelScale = 1.0f;
+            }
+            accelScaleFound = true;
+        }
+    }
 }
 
-static void imuAccAlignToGravity(Axis3i16* in, Axis3i16* out) {
-    if (!in || !out) return;
+static bool configure_mpu6050(void) {
+    mpu6050Reset();
+    vTaskDelay(pdMS_TO_TICKS(50));
+    mpu6050SetSleepEnabled(false);
+    mpu6050SetClockSource(MPU6050_CLOCK_PLL_XGYRO);
+    mpu6050SetFullScaleGyroRange(IMU_GYRO_FS_CFG);
+    mpu6050SetFullScaleAccelRange(IMU_ACCEL_FS_CFG);
+    mpu6050SetDLPFMode(MPU6050_DLPF_BW_42); // Un buen balance para drones
+    return true;
+}
 
-    // Rotate around X axis
-    int16_t rx_y = in->y * cosRoll - in->z * sinRoll;
-    int16_t rx_z = in->y * sinRoll + in->z * cosRoll;
+// Implementación de las funciones de estado
+imu_state_t imu_get_state(void) {
+    return imuState;
+}
 
-    // Rotate around Y axis
-    out->x = in->x * cosPitch - rx_z * sinPitch;
-    out->y = rx_y;
-    out->z = -in->x * sinPitch + rx_z * cosPitch;
+const char* imu_get_state_string(void) {
+    switch(imuState) {
+        case IMU_STATE_UNINITIALIZED: return "UNINITIALIZED";
+        case IMU_STATE_INITIALIZED:   return "INITIALIZED";
+        case IMU_STATE_CALIBRATING:   return "CALIBRATING";
+        case IMU_STATE_CALIBRATED:    return "CALIBRATED";
+        case IMU_STATE_ERROR:         return "ERROR";
+        default:                      return "UNKNOWN";
+    }
 }

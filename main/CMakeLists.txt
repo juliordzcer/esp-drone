@@ -1,3 +1,2 @@
-
 idf_component_register(SRCS "app_main.c"
-                       REQUIRES drivers bsp utils)
+                       PRIV_REQUIRES drivers bsp utils modules )

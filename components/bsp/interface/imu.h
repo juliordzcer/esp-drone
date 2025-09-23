@@ -2,29 +2,11 @@
 #define IMU_H_
 
 #include <stdbool.h>
-#include "filter.h"
 
-#ifndef IMU_UPDATE_FREQ
-#define IMU_UPDATE_FREQ   500
-#endif
-
-#ifndef IMU_UPDATE_RATE_MS
-#define IMU_UPDATE_RATE_MS 100
-#endif
-
-#define IMU_UPDATE_DT     (1.0f / IMU_UPDATE_FREQ)
-
-#ifndef IMU_ACC_WANTED_LPF_CUTOFF_HZ
-#define IMU_ACC_WANTED_LPF_CUTOFF_HZ  10
-#endif
-
-#define IMU_ACC_IIR_LPF_ATTENUATION (IMU_UPDATE_FREQ / (2 * 3.1415f * IMU_ACC_WANTED_LPF_CUTOFF_HZ))
-#define IMU_ACC_IIR_LPF_ATT_FACTOR  ((int)((1 << IIR_SHIFT) / IMU_ACC_IIR_LPF_ATTENUATION + 0.5f))
-
-typedef struct { int16_t x, y, z; } Axis3i16;
-typedef struct { int32_t x, y, z; } Axis3i32;
+// Estructuras de datos para los ejes (puedes moverlas a un imu_types.h si prefieres)
 typedef struct { float x, y, z; } Axis3f;
 
+// Estados del IMU
 typedef enum {
     IMU_STATE_UNINITIALIZED,
     IMU_STATE_INITIALIZED,
@@ -33,11 +15,45 @@ typedef enum {
     IMU_STATE_ERROR
 } imu_state_t;
 
-bool imu6Init(void);
-bool imu6Test(void);
-void imu6Read(Axis3f* gyro, Axis3f* acc);
-bool imu6IsCalibrated(void);
-imu_state_t imu6GetState(void);
-const char* imu6GetStateString(void);
+/**
+ * @brief Inicializa el sensor MPU-6050 y el driver.
+ * @return true si la inicialización fue exitosa.
+ */
+bool imu_init(void);
 
-#endif
+/**
+ * @brief Realiza una auto-prueba de hardware del MPU-6050.
+ * @return true si la prueba fue exitosa.
+ */
+bool imu_test(void);
+
+/**
+ * @brief Lee los datos del giroscopio y acelerómetro.
+ *
+ * Durante las primeras llamadas, esta función realizará la calibración.
+ * Una vez calibrado, devolverá lecturas corregidas y filtradas.
+ *
+ * @param gyro Puntero para almacenar los datos del giroscopio en grados/segundo.
+ * @param acc Puntero para almacenar los datos del acelerómetro en g's.
+ */
+void imu_read(Axis3f* gyro, Axis3f* acc);
+
+/**
+ * @brief Comprueba si el IMU ha completado la calibración.
+ * @return true si la calibración de giroscopio y acelerómetro ha finalizado.
+ */
+bool imu_is_calibrated(void);
+
+/**
+ * @brief Obtiene el estado actual del driver del IMU.
+ * @return El estado actual como un enum imu_state_t.
+ */
+imu_state_t imu_get_state(void);
+
+/**
+ * @brief Obtiene el estado actual del driver como una cadena de texto.
+ * @return Una cadena de texto que describe el estado actual.
+ */
+const char* imu_get_state_string(void);
+
+#endif // IMU_H_

@@ -15,6 +15,7 @@
         "vl53l1_api.h": "c",
         "vl53l1_platform.h": "c",
         "math.h": "c",
-        "stdint.h": "c"
+        "stdint.h": "c",
+        "sensor_fusion.h": "c"
     }
 }
