@@ -76,6 +76,7 @@ extern ledseq_t seq_calibrated[];
 extern ledseq_t seq_alive[];
 extern ledseq_t seq_lowbat[];
 extern ledseq_t seq_linkup[];
+extern ledseq_t seq_hover[];
 extern ledseq_t seq_charged[];
 extern ledseq_t seq_charging[];
 extern ledseq_t seq_bootloader[];

@@ -3,29 +3,28 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 
-#include "commander.h" // Ahora incluye la definición de struct CommanderCrtpValues
+#include "commander.h"
 #include "crtp.h"
 #include "configblock.h"
 
 #define MIN_THRUST  10000
 #define MAX_THRUST  60000
 
-// [CORRECCIÓN] Definiciones de variables globales (sin 'static') para acceso externo (ej: log.c)
-struct CommanderCrtpValues targetVal[2];
-int side = 0;
+// [CORRECCIÓN] Quitar la definición duplicada de la estructura
+// La estructura ya está definida en commander.h
 
-// Variables internas (static)
+// [CORRECCIÓN] Definir las variables como extern (sin static)
+struct CommanderCrtpValues targetVal[2];  // <-- QUITAR 'static'
+int side = 0;                             // <-- QUITAR 'static'
+bool hoverMode = false;                   // <-- AÑADIR definición
+
 static bool isInit;
 static uint32_t lastUpdate;
 static bool isInactive;
-static QueueHandle_t commandQueue = NULL;
-static TaskHandle_t commanderTaskHandle = NULL;
 
-// Declaraciones de funciones internas (static)
 static void commanderCrtpCB(CRTPPacket* pk);
 static void commanderWatchdog(void);
 static void commanderWatchdogReset(void);
-static void commanderTask(void *param);
 
 void commanderInit(void)
 {
@@ -33,80 +32,24 @@ void commanderInit(void)
     return;
 
   crtpInit();
-  
-  // Inicializar cola CRTP para commander
-  crtpInitTaskQueue(CRTP_PORT_COMMANDER);
   crtpRegisterPortCB(CRTP_PORT_COMMANDER, commanderCrtpCB);
-
-  // Crear cola interna para comandos
-  // La línea con sizeof(struct CommanderCrtpValues) ahora funciona.
-  commandQueue = xQueueCreate(10, sizeof(struct CommanderCrtpValues));
-  if (commandQueue == NULL) {
-    ESP_LOGE("COMMANDER", "Error creando cola interna de comandos");
-    return;
-  }
-
-  // Crear tarea de procesamiento
-  if (xTaskCreate(commanderTask, "COMMANDER_TASK", 3072, NULL, 3, &commanderTaskHandle) != pdPASS) {
-    ESP_LOGE("COMMANDER", "Error creando tarea commander");
-    vQueueDelete(commandQueue);
-    commandQueue = NULL;
-    return;
-  }
 
   lastUpdate = xTaskGetTickCount();
   isInactive = true;
   isInit = true;
-  
-  ESP_LOGI("COMMANDER", "Commander inicializado - Cola para puerto %d creada", CRTP_PORT_COMMANDER);
 }
 
 bool commanderTest(void)
 {
-  return isInit && (commandQueue != NULL);
+  crtpTest();
+  return isInit;
 }
 
-// Tarea de procesamiento de comandos
-static void commanderTask(void *param)
-{
-    // La declaración local de 'cmd' ahora es válida.
-    struct CommanderCrtpValues cmd;
-    
-    ESP_LOGI("COMMANDER", "Tarea commander iniciada");
-    
-    while (true) {
-        // Procesar comandos de la cola interna
-        if (xQueueReceive(commandQueue, &cmd, pdMS_TO_TICKS(10)) == pdTRUE) {
-            targetVal[!side] = cmd;
-            side = !side;
-            commanderWatchdogReset();
-            
-            // Log para debug (opcional)
-            ESP_LOGD("COMMANDER", "Comando procesado - Thrust: %d", cmd.thrust);
-        }
-        
-        vTaskDelay(pdMS_TO_TICKS(5)); // 200Hz
-    }
-}
-
-// Callback CRTP - se ejecuta cuando llega un paquete al puerto 3
 static void commanderCrtpCB(CRTPPacket* pk)
 {
-    // sizeof() ahora es válido.
-    if (pk == NULL || pk->size < sizeof(struct CommanderCrtpValues)) {
-        ESP_LOGW("COMMANDER", "Paquete CRTP inválido");
-        return;
-    }
-    
-    // La variable 'newCmd' ahora es válida.
-    struct CommanderCrtpValues newCmd = *((struct CommanderCrtpValues*)pk->data);
-    
-    // Enviar a la cola interna (no bloqueante)
-    if (commandQueue != NULL) {
-        if (xQueueSend(commandQueue, &newCmd, 0) != pdTRUE) {
-            ESP_LOGW("COMMANDER", "Cola interna llena, comando descartado");
-        }
-    }
+  targetVal[!side] = *((struct CommanderCrtpValues*)pk->data);
+  side = !side;
+  commanderWatchdogReset();
 }
 
 static void commanderWatchdog(void)
@@ -147,22 +90,29 @@ void commanderGetRPY(float* eulerRollDesired, float* eulerPitchDesired, float* e
 {
   int usedSide = side;
 
-  if (eulerRollDesired) *eulerRollDesired = targetVal[usedSide].roll;
-  if (eulerPitchDesired) *eulerPitchDesired = targetVal[usedSide].pitch;
-  if (eulerYawDesired) *eulerYawDesired = targetVal[usedSide].yaw;
+  *eulerRollDesired  = targetVal[usedSide].roll;
+  *eulerPitchDesired = targetVal[usedSide].pitch;
+  *eulerYawDesired   = targetVal[usedSide].yaw;
+}
+
+void commanderGetHover(bool* hover, bool* set_hover, float* hover_change) {
+    int usedSide = side;
+    *hover = targetVal[usedSide].hover; 
+    *set_hover = !hoverMode && targetVal[usedSide].hover; 
+    *hover_change = targetVal[usedSide].hover ? targetVal[usedSide].thrust : 0;
+    hoverMode = targetVal[usedSide].hover;
 }
 
 void commanderGetRPYType(RPYType* rollType, RPYType* pitchType, RPYType* yawType)
 {
-  if (rollType) *rollType = ANGLE;
-  if (pitchType) *pitchType = ANGLE;
-  if (yawType) *yawType = RATE;
+  *rollType  = ANGLE;
+  *pitchType = ANGLE;
+  *yawType   = RATE;
 }
 
-void commanderGetTrust(uint16_t* thrust)
+// [CORRECCIÓN] Solo una definición de commanderGetThrust
+void commanderGetThrust(uint16_t* thrust)
 {
-  if (thrust == NULL) return;
-  
   int usedSide = side;
   uint16_t rawThrust = targetVal[usedSide].thrust;
 

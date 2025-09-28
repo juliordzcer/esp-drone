@@ -29,6 +29,8 @@
 #include <stdbool.h>
 #include "commander.h"
 
+#define IMU_UPDATE_FREQ   500
+#define IMU_UPDATE_DT     (float)(1.0/IMU_UPDATE_FREQ)
 
 void controllerInit(void);
 bool controllerTest(void);
