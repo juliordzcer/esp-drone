@@ -42,7 +42,7 @@ const uint16_t V_REVISION_1=0x0000;
 // Aquí se muestra cómo se vería si se ignorara el macro.
 // Si tu cadena de construcción aún lo necesita, no modifiques estas líneas.
 
-// PARAM_GROUP_START(version)
-// PARAM_ADD(PARAM_UINT32 | PARAM_RONLY, revision0, &V_REVISION_0)
-// PARAM_ADD(PARAM_UINT16 | PARAM_RONLY, revision1, &V_REVISION_1)
-// PARAM_GROUP_STOP(version)
+PARAM_GROUP_START(version)
+PARAM_ADD(PARAM_UINT32 | PARAM_RONLY, revision0, &V_REVISION_0)
+PARAM_ADD(PARAM_UINT16 | PARAM_RONLY, revision1, &V_REVISION_1)
+PARAM_GROUP_STOP(version)

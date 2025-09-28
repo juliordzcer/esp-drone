@@ -27,7 +27,7 @@
 // =================================================================
 #define WIFI_SSID      "INFINITUM0361"
 #define WIFI_PASSWORD  "cx4WSwVdRV"
-#define UDP_PORT       1998 // Puerto para la comunicación CRTP
+#define UDP_PORT       2390 // Puerto para la comunicación CRTP
 
 // Event group para sincronización Wi-Fi
 #define WIFI_CONNECTED_BIT BIT0

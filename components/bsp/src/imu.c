@@ -7,6 +7,7 @@
 #include "i2c_dev.h"
 #include "mpu6050.h"
 #include "filter.h" 
+#include "param.h"
 
 // =================================================================
 // ============== PARÁMETROS DE CONFIGURACIÓN Y AJUSTE =============
@@ -35,7 +36,7 @@
 // =================== FIN DE LA CONFIGURACIÓN =====================
 // =================================================================
 
-static const char* TAG = "IMU_IMPROVED";
+static const char* TAG = "IMU";
 
 // Estructuras internas
 typedef struct { int16_t x, y, z; } Axis3i16;

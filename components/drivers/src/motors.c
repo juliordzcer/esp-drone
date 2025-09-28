@@ -17,11 +17,12 @@ static const char *TAG = "MOTORS";
 #define C_BITS_TO_16(X) ((X) << (16 - MOTORS_PWM_BITS))
 
 // Mapeo de los motores a los canales del periférico LEDC
-#define MOTOR_LEFT_CH   LEDC_CHANNEL_0
-#define MOTOR_REAR_CH   LEDC_CHANNEL_1
-#define MOTOR_RIGHT_CH  LEDC_CHANNEL_2
-#define MOTOR_FRONT_CH  LEDC_CHANNEL_3
+#define MOTOR_M1_CH   LEDC_CHANNEL_0
+#define MOTOR_M2_CH   LEDC_CHANNEL_1
+#define MOTOR_M3_CH  LEDC_CHANNEL_2
+#define MOTOR_M4_CH  LEDC_CHANNEL_3
 
+static int MOTORS[] = { MOTOR_M4, MOTOR_M3, MOTOR_M2, MOTOR_M1};
 // Variable para asegurar que la inicialización solo ocurra una vez
 static bool isInit = false;
 
@@ -46,36 +47,36 @@ void motorsInit() {
     // 2. Configurar los Canales del LEDC (uno por cada motor)
     ledc_channel_config_t ledc_channel[] = {
         { // Motor Izquierdo (MOT_3 -> GPIO3)
-            .gpio_num   = MOTOR_LEFT_GPIO,
+            .gpio_num   = MOTOR_M1_GPIO,
             .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel    = MOTOR_LEFT_CH,
+            .channel    = MOTOR_M1_CH,
             .intr_type  = LEDC_INTR_DISABLE,
             .timer_sel  = LEDC_TIMER_0,
             .duty       = 0,
             .hpoint     = 0
         },
         { // Motor Trasero (MOT_4 -> GPIO4)
-            .gpio_num   = MOTOR_REAR_GPIO,
+            .gpio_num   = MOTOR_M2_GPIO,
             .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel    = MOTOR_REAR_CH,
+            .channel    = MOTOR_M2_CH,
             .intr_type  = LEDC_INTR_DISABLE,
             .timer_sel  = LEDC_TIMER_0,
             .duty       = 0,
             .hpoint     = 0
         },
         { // Motor Derecho (MOT_2 -> GPIO6)
-            .gpio_num   = MOTOR_RIGHT_GPIO,
+            .gpio_num   = MOTOR_M3_GPIO,
             .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel    = MOTOR_RIGHT_CH,
+            .channel    = MOTOR_M3_CH,
             .intr_type  = LEDC_INTR_DISABLE,
             .timer_sel  = LEDC_TIMER_0,
             .duty       = 0,
             .hpoint     = 0
         },
         { // Motor Frontal (MOT_1 -> GPIO5)
-            .gpio_num   = MOTOR_FRONT_GPIO,
+            .gpio_num   = MOTOR_M4_GPIO,
             .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel    = MOTOR_FRONT_CH,
+            .channel    = MOTOR_M4_CH,
             .intr_type  = LEDC_INTR_DISABLE,
             .timer_sel  = LEDC_TIMER_0,
             .duty       = 0,
@@ -92,28 +93,20 @@ void motorsInit() {
     isInit = true;
 }
 
+
 bool motorsTest(void) {
     if (!isInit) return false;
 
     ESP_LOGI(TAG, "Running motor test sequence...");
-    motorsSetRatio(MOTOR_FRONT, MOTORS_TEST_RATIO);
-    vTaskDelay(pdMS_TO_TICKS(MOTORS_TEST_ON_TIME));
-    motorsSetRatio(MOTOR_FRONT, 0);
-    vTaskDelay(pdMS_TO_TICKS(MOTORS_TEST_DELAY_TIME));
 
-    motorsSetRatio(MOTOR_RIGHT, MOTORS_TEST_RATIO);
-    vTaskDelay(pdMS_TO_TICKS(MOTORS_TEST_ON_TIME));
-    motorsSetRatio(MOTOR_RIGHT, 0);
-    vTaskDelay(pdMS_TO_TICKS(MOTORS_TEST_DELAY_TIME));
+    int i;
+    for (i = 0; i < sizeof(MOTORS)/sizeof(*MOTORS); i++) {
+        motorsSetRatio(MOTORS[i], MOTORS_TEST_RATIO);
+        vTaskDelay(pdMS_TO_TICKS(MOTORS_TEST_ON_TIME));
+        motorsSetRatio(MOTORS[i], 0);
+        vTaskDelay(pdMS_TO_TICKS(MOTORS_TEST_DELAY_TIME));
+    }
 
-    motorsSetRatio(MOTOR_REAR, MOTORS_TEST_RATIO);
-    vTaskDelay(pdMS_TO_TICKS(MOTORS_TEST_ON_TIME));
-    motorsSetRatio(MOTOR_REAR, 0);
-    vTaskDelay(pdMS_TO_TICKS(MOTORS_TEST_DELAY_TIME));
-
-    motorsSetRatio(MOTOR_LEFT, MOTORS_TEST_RATIO);
-    vTaskDelay(pdMS_TO_TICKS(MOTORS_TEST_ON_TIME));
-    motorsSetRatio(MOTOR_LEFT, 0);
     ESP_LOGI(TAG, "Motor test finished.");
 
     return isInit;
@@ -127,10 +120,10 @@ void motorsSetRatio(int id, uint16_t ratio) {
     ledc_channel_t channel;
 
     switch(id) {
-        case MOTOR_LEFT:  channel = MOTOR_LEFT_CH;  break;
-        case MOTOR_REAR:  channel = MOTOR_REAR_CH;  break;
-        case MOTOR_RIGHT: channel = MOTOR_RIGHT_CH; break;
-        case MOTOR_FRONT: channel = MOTOR_FRONT_CH; break;
+        case MOTOR_M1:  channel = MOTOR_M1_CH; break;
+        case MOTOR_M2:  channel = MOTOR_M2_CH; break;
+        case MOTOR_M3:  channel = MOTOR_M3_CH; break;
+        case MOTOR_M4:  channel = MOTOR_M4_CH; break;
         default: return; // ID de motor no válido
     }
     
@@ -144,10 +137,10 @@ int motorsGetRatio(int id) {
     
     ledc_channel_t channel;
     switch(id) {
-        case MOTOR_LEFT:  channel = MOTOR_LEFT_CH;  break;
-        case MOTOR_REAR:  channel = MOTOR_REAR_CH;  break;
-        case MOTOR_RIGHT: channel = MOTOR_RIGHT_CH; break;
-        case MOTOR_FRONT: channel = MOTOR_FRONT_CH; break;
+        case MOTOR_M1:  channel = MOTOR_M1_CH; break;
+        case MOTOR_M2:  channel = MOTOR_M2_CH; break;
+        case MOTOR_M3:  channel = MOTOR_M3_CH; break;
+        case MOTOR_M4:  channel = MOTOR_M4_CH; break;
         default: return -1; // ID de motor no válido
     }
 
@@ -157,6 +150,7 @@ int motorsGetRatio(int id) {
 }
 
 // Tarea de FreeRTOS para probar los motores
+
 void motorsTestTask(void* params) {
     ESP_LOGI(TAG, "Starting motor test task...");
     
@@ -172,10 +166,10 @@ void motorsTestTask(void* params) {
     int step = 0;
 
     while(1) {
-        motorsSetRatio(MOTOR_LEFT,  sequence[step % 4]);
-        motorsSetRatio(MOTOR_REAR,  sequence[(step + 1) % 4]);
-        motorsSetRatio(MOTOR_RIGHT, sequence[(step + 2) % 4]);
-        motorsSetRatio(MOTOR_FRONT, sequence[(step + 3) % 4]);
+        motorsSetRatio(MOTOR_M1, sequence[step % 4]);
+        motorsSetRatio(MOTOR_M2, sequence[(step + 1) % 4]);
+        motorsSetRatio(MOTOR_M3, sequence[(step + 2) % 4]);
+        motorsSetRatio(MOTOR_M4, sequence[(step + 3) % 4]);
 
         step++;
         if (step >= 4) {

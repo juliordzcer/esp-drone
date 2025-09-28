@@ -7,10 +7,10 @@
 /******** Defines ********/
 
 // Mapeo de pines para tu ESP32
-#define MOTOR_FRONT_GPIO    5   // Tu MOT_1
-#define MOTOR_RIGHT_GPIO    6   // Tu MOT_2
-#define MOTOR_LEFT_GPIO     3   // Tu MOT_3
-#define MOTOR_REAR_GPIO     4   // Tu MOT_4
+#define MOTOR_M1_GPIO    5
+#define MOTOR_M2_GPIO    6
+#define MOTOR_M3_GPIO    3
+#define MOTOR_M4_GPIO    4
 
 // Configuración del PWM con el periférico LEDC del ESP32
 // El original usaba 9 bits, lo cual es perfecto para el LEDC.
@@ -19,15 +19,16 @@
 #define MOTORS_PWM_PERIOD   ((1 << MOTORS_PWM_BITS) - 1)
 
 // IDs de los motores (se mantienen igual)
-#define MOTOR_LEFT  0
-#define MOTOR_REAR  1
-#define MOTOR_RIGHT 2
-#define MOTOR_FRONT 3
+#define MOTOR_M1  0
+#define MOTOR_M2  1
+#define MOTOR_M3 2
+#define MOTOR_M4 3
 
 // Defines para la función de prueba
-#define MOTORS_TEST_RATIO         (uint16_t)(0.2 * 65535) // 20% del duty cycle para el test
-#define MOTORS_TEST_ON_TIME       200 // ms
-#define MOTORS_TEST_DELAY_TIME    100 // ms
+// #define MOTORS_TEST_RATIO         (uint16_t)(0.2 * 65535) // 20% del duty cycle para el test
+#define MOTORS_TEST_RATIO         (uint16_t)(0.5*(1<<16))
+#define MOTORS_TEST_ON_TIME       10 // ms
+#define MOTORS_TEST_DELAY_TIME    50 // ms
 
 /*** Interfaz pública ***/
 
@@ -45,7 +46,7 @@ bool motorsTest(void);
 
 /**
  * @brief Establece la velocidad (duty cycle) de un motor específico.
- * @param id El identificador del motor (MOTOR_LEFT, MOTOR_RIGHT, etc.).
+ * @param id El identificador del motor (MOTOR_M1, MOTOR_M3, etc.).
  * @param ratio Un valor de 16 bits (0 a 65535) que representa la velocidad de 0% a 100%.
  */
 void motorsSetRatio(int id, uint16_t ratio);
