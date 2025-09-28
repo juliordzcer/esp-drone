@@ -1,63 +1,64 @@
 import socket
 import time
 import struct
+import math
 
 DRONE_IP = "192.168.1.83"
 DRONE_PORT = 1998
 
-def create_correct_commander_packet(roll, pitch, yaw, thrust):
-    """
-    Formato exacto que espera el commander:
-    struct CommanderCrtpValues {
-        float roll;
-        float pitch; 
-        float yaw;
-        uint16_t thrust;
-    } __attribute__((packed));
-    
-    Total: 4 + 4 + 4 + 2 = 14 bytes + header
-    """
-    header = 0x30  # port=3, channel=0
-    # Empaquetar: header + 3 floats + 1 uint16
-    data = struct.pack('<BfffH', header, roll, pitch, yaw, thrust)
-    return data
+def create_exact_commander_packet(roll, pitch, yaw, thrust):
+    header = 0x30
+    return struct.pack('<BfffH', header, roll, pitch, yaw, thrust)
 
-def test_commander_fixed():
+def test_commander_25hz():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
     try:
-        print("=== TEST COMMANDER CON FORMATO CORRECTO ===")
+        print("=== COMMANDER 25Hz OPTIMIZADO ===")
         
-        # Enviar comando de despegue por 5 segundos
         start_time = time.time()
         packet_count = 0
         
-        while time.time() - start_time < 10:
-            # Thrust gradual
+        while time.time() - start_time < 12:
             elapsed = time.time() - start_time
-            if elapsed < 3:
-                thrust = int(30000 + 10000 * (elapsed / 3))  # 30000-40000
-            elif elapsed < 7:
-                thrust = 40000  # Mantener
-            else:
-                thrust = int(40000 - 20000 * ((elapsed - 7) / 3))  # Descender
             
-            packet = create_correct_commander_packet(0.0, 0.0, 0.0, thrust)
+            # Perfil de vuelo más conservador
+            if elapsed < 3:
+                thrust = int(15000 + 25000 * (elapsed / 3))  # 15000-40000
+            elif elapsed < 6:
+                thrust = 40000  # Mantener
+            elif elapsed < 9:
+                thrust = 35000  # Reducir un poco
+            else:
+                thrust = int(35000 - 35000 * ((elapsed - 9) / 3))  # Descender
+            
+            # Movimientos muy suaves
+            roll = 0.02 * math.sin(elapsed * 1.0)
+            pitch = 0.02 * math.cos(elapsed * 1.0)
+            
+            packet = create_exact_commander_packet(roll, pitch, 0.0, thrust)
             sock.sendto(packet, (DRONE_IP, DRONE_PORT))
             
             packet_count += 1
-            if packet_count % 10 == 0:
-                print(f"Paquete {packet_count}: thrust={thrust}")
             
-            time.sleep(0.02)  # 50Hz - igual que la frecuencia del stabilizer
+            if packet_count % 25 == 0:  # Log cada segundo (25 paquetes)
+                print(f"T+{int(elapsed)}s: thrust={thrust}")
+            
+            time.sleep(0.04)  # 25Hz
         
-        print(f"Test completado. Total paquetes: {packet_count}")
+        print(f"✅ Test completado. Total paquetes: {packet_count}")
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
         
     finally:
-        # Enviar comando de stop final
-        stop_packet = create_correct_commander_packet(0.0, 0.0, 0.0, 0)
-        sock.sendto(stop_packet, (DRONE_IP, DRONE_PORT))
+        # Stop seguro
+        for i in range(10):
+            stop_packet = create_exact_commander_packet(0.0, 0.0, 0.0, 0)
+            sock.sendto(stop_packet, (DRONE_IP, DRONE_PORT))
+            time.sleep(0.01)
+        
         sock.close()
 
 if __name__ == "__main__":
-    test_commander_fixed()
+    test_commander_25hz()

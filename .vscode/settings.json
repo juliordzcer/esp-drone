@@ -29,6 +29,8 @@
         "commander.h": "c",
         "led.h": "c",
         "configblock.h": "c",
-        "log.h": "c"
+        "log.h": "c",
+        "controller.h": "c",
+        "crtp.h": "c"
     }
 }

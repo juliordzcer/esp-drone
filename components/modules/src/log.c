@@ -19,6 +19,7 @@
 #include "stabilizer.h"
 #include "console.h"
 
+
 #if 0
 #define DEBUG(fmt, ...) consolePrintf("D/log " fmt, ## __VA_ARGS__)
 #define ERROR(fmt, ...) consolePrintf("E/log " fmt, ## __VA_ARGS__)
@@ -27,28 +28,6 @@
 #define ERROR(...)
 #endif
 
-// Define la estructura directamente en este archivo
-typedef struct {
-    float roll;
-    float pitch;
-    float yaw;
-} attitude_s;
-
-// Define la variable global (no extern)
-static attitude_s attitude = {0};
-
-// Redefine LOG_ADD para que coincida con el formato esperado (sin coma extra)
-#undef LOG_ADD
-#define LOG_ADD(TYPE, NAME, ADDRESS) {TYPE, #NAME, ADDRESS}
-
-const struct log_s allLogs[] = {
-    // Agrega todas las variables que necesites loguear
-    LOG_ADD(LOG_FLOAT, roll, &attitude.roll),
-    LOG_ADD(LOG_FLOAT, pitch, &attitude.pitch),
-    LOG_ADD(LOG_FLOAT, yaw, &attitude.yaw)
-    // Agrega más entradas aquí si es necesario
-};
-static const int allLogsCount = sizeof(allLogs) / sizeof(allLogs[0]);
 
 static const uint8_t typeLength[] = {
   [LOG_UINT8]  = 1,
@@ -114,8 +93,12 @@ static void logControlProcess(void);
 void logRunBlock(void * arg);
 void logBlockTimed(TimerHandle_t timer);
 
+//These are set by the Linker
+extern struct log_s _log_start;
+extern struct log_s _log_end;
+
 //Pointer to the logeters list and length of it
-static const struct log_s * logs;
+static struct log_s * logs;
 static int logsLen;
 static uint32_t logsCrc;
 static int logsCount = 0;
@@ -130,11 +113,6 @@ static int logStartBlock(int id, unsigned int period);
 static int logStopBlock(int id);
 static void logReset();
 
-// Función wrapper para crcSlow que acepta const
-static uint32_t crcSlowConst(const void *datas, int nBytes) {
-    return crcSlow((void*)datas, nBytes);
-}
-
 void logInit(void)
 {
   int i;
@@ -142,11 +120,10 @@ void logInit(void)
   if(isInit)
     return;
 
-  logs = allLogs;
-  logsLen = allLogsCount;
-  logsCrc = crcSlowConst(logs, logsLen * sizeof(struct log_s));
+  logs = &_log_start;
+  logsLen = &_log_end - &_log_start;
+  logsCrc = crcSlow(logs, logsLen);
   
-
   // Big lock that protects the log datastructures
   logLock = xSemaphoreCreateMutex();
 
@@ -168,7 +145,6 @@ void logInit(void)
     configMINIMAL_STACK_SIZE + 2048, NULL, /*priority*/1, NULL); 
 
   isInit = true;
-  ESP_LOGI("LOG", "Log module initialized.");
 }
 
 bool logTest(void)
@@ -180,29 +156,24 @@ static CRTPPacket p;
 
 void logTask(void * prm)
 {
-  static CRTPPacket p; // Hacerla static para que no use stack de la tarea
-  
-  crtpInitTaskQueue(CRTP_PORT_LOG);
-  
-  while(1) {
-    crtpReceivePacketBlock(CRTP_PORT_LOG, &p);
-    
-    xSemaphoreTake(logLock, portMAX_DELAY);
-    if (p.channel==TOC_CH)
-      logTOCProcess(p.data[0]);
-    else if (p.channel==CONTROL_CH)
-      logControlProcess();
-    xSemaphoreGive(logLock);
-    
-    // Pequeña pausa para dar tiempo a otras tareas
-    vTaskDelay(pdMS_TO_TICKS(1));
-  }
+	crtpInitTaskQueue(CRTP_PORT_LOG);
+	
+	while(1) {
+		crtpReceivePacketBlock(CRTP_PORT_LOG, &p);
+		
+		xSemaphoreTake(logLock, portMAX_DELAY);
+		if (p.channel==TOC_CH)
+		  logTOCProcess(p.data[0]);
+		if (p.channel==CONTROL_CH)
+		  logControlProcess();
+		xSemaphoreGive(logLock);
+	}
 }
 
 void logTOCProcess(int command)
 {
   int ptr = 0;
-  const char * group = "";
+  char * group = "plop";
   int n=0;
   
   switch (command)
@@ -215,7 +186,7 @@ void logTOCProcess(int command)
     p.size=8;
     p.data[0]=CMD_GET_INFO;
     p.data[1]=logsCount;
-    memcpy(&p.data[2], &logsCrc, sizeof(uint32_t));
+    memcpy(&p.data[2], &logsCrc, 4);
     p.data[6]=LOG_MAX_BLOCKS;
     p.data[7]=LOG_MAX_OPS;
     crtpSendPacket(&p);
@@ -315,8 +286,8 @@ static int logCreateBlock(unsigned char id, struct ops_setting * settings, int l
   
   if (logBlocks[i].timer == NULL)
   {
-    logBlocks[i].id = BLOCK_ID_FREE;
-    return ENOMEM;
+	logBlocks[i].id = BLOCK_ID_FREE;
+	return ENOMEM;
   }
 
   DEBUG("Added block ID %d\n", id);
@@ -418,10 +389,10 @@ static int logDeleteBlock(int id)
     ops = opsNext;
   }
   
-  if (logBlocks[i].timer != NULL) {
+  if (logBlocks[i].timer != 0) {
     xTimerStop(logBlocks[i].timer, portMAX_DELAY);
     xTimerDelete(logBlocks[i].timer, portMAX_DELAY);
-    logBlocks[i].timer = NULL;
+    logBlocks[i].timer = 0;
   }
   
   logBlocks[i].id = BLOCK_ID_FREE;
@@ -444,8 +415,8 @@ static int logStartBlock(int id, unsigned int period)
   
   if (period>0)
   {
-    xTimerChangePeriod(logBlocks[i].timer, pdMS_TO_TICKS(period), portMAX_DELAY);
-    xTimerStart(logBlocks[i].timer, portMAX_DELAY);
+    xTimerChangePeriod(logBlocks[i].timer, M2T(period), 100);
+    xTimerStart(logBlocks[i].timer, 100);
   } else {
     // single-shoot run
     workerSchedule(logRunBlock, &logBlocks[i]);
@@ -482,7 +453,7 @@ void logRunBlock(void * arg)
 {
   struct log_block *blk = arg;
   struct log_ops *ops = blk->ops;
-  CRTPPacket pk = {0};
+  static CRTPPacket pk;
   unsigned int timestamp;
   
   xSemaphoreTake(logLock, portMAX_DELAY);
@@ -490,12 +461,12 @@ void logRunBlock(void * arg)
   timestamp = (xTaskGetTickCount() * 1000) / configTICK_RATE_HZ;
   
   pk.header = CRTP_HEADER(CRTP_PORT_LOG, LOG_CH);
-  pk.size = 1;
+  pk.size = 4;
   pk.data[0] = blk->id;
-  
-  memcpy(&pk.data[1], &timestamp, sizeof(timestamp));
-  pk.size += sizeof(timestamp);
-  
+  pk.data[1] = timestamp&0x0ff;
+  pk.data[2] = (timestamp>>8)&0x0ff;
+  pk.data[3] = (timestamp>>16)&0x0ff;
+
   while (ops)
   {
     int valuei = 0;

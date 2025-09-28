@@ -40,5 +40,7 @@ void wifilinkGetConnectionInfo(char* ssid, char* ip, int ip_len);
  * @param last_packet_time Timestamp del último paquete (opcional)
  */
 void wifilinkGetStats(uint32_t* packets_received, uint32_t* last_packet_time);
+// En wifilink.h, agrega esta declaración:
+int wifilinkSendLogPacket(CRTPPacket *pk);
 
 #endif /* WIFILINK_H_ */

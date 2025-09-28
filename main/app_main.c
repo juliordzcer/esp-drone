@@ -25,6 +25,19 @@
 // Add the required FreeRTOS headers
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <stdint.h> // Required for uint8_t
+
+// --- FIX CRÍTICO DEL LINKER: FORZAR INCLUSIÓN DE SÍMBOLOS ---
+// Estos símbolos marcan el inicio y el fin de las secciones de datos 
+// personalizados (.log* y .param*) definidas en 'module_linker_fragment.lf'.
+// Se declaran aquí como 'extern const' para que el linker sepa que deben 
+// ser preservados y no sean eliminados por el "garbage collector" del linker.
+extern const uint8_t _log_start;
+extern const uint8_t _log_stop;
+extern const uint8_t _param_start;
+extern const uint8_t _param_stop;
+// --------------------------------------------------------
+
 
 // The main entry point for the ESP32 application
 void app_main(void)

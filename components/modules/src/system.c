@@ -25,6 +25,8 @@
 #include "commander.h"
 #include "console.h"
 #include "imu.h"  // Añadir para imuIsCalibrated()
+#include "log.h" 
+
 
 static const char *TAG = "SYSTEM";
 
@@ -176,15 +178,21 @@ void systemTask(void *arg)
   ESP_LOGI(TAG, "Build %s:%s (%s) %s", V_SLOCAL_REVISION,
               V_SREVISION, V_STAG, (V_MODIFIED)?"MODIFIED":"CLEAN");
   vTaskDelay(pdMS_TO_TICKS(100));
+  
+  ESP_LOGI(TAG, "Step 4: Calling logInit()...");
+  logInit();
+  ESP_LOGI(TAG, "Step 5: logInit() completed.");
+  vTaskDelay(pdMS_TO_TICKS(100));
 
-  ESP_LOGI(TAG, "Step 4: Calling commanderInit()...");
+  ESP_LOGI(TAG, "Step 6: Calling commanderInit()...");
   commanderInit();
-  ESP_LOGI(TAG, "Step 5: commanderInit() completed.");
+
+  ESP_LOGI(TAG, "Step 7: commanderInit() completed.");
   vTaskDelay(pdMS_TO_TICKS(100));
   
-  ESP_LOGI(TAG, "Step 6: Calling stabilizerInit()...");
+  ESP_LOGI(TAG, "Step 8: Calling stabilizerInit()...");
   stabilizerInit();
-  ESP_LOGI(TAG, "Step 7: stabilizerInit() completed.");
+  ESP_LOGI(TAG, "Step 9: stabilizerInit() completed.");
   vTaskDelay(pdMS_TO_TICKS(100));
   
   //Test the modules

@@ -1,5 +1,3 @@
-
-
 #include <stdbool.h>
 #include <errno.h>
 #include <string.h>
@@ -18,23 +16,11 @@
 
 static bool isInit;
 
-// Funciones nop corregidas
-static void nopSetEnable(bool enable) {
-    // No hacer nada
-}
-
-static int nopSendPacket(CRTPPacket *pk) {
-    return -1; // ENETDOWN
-}
-
-static int nopReceivePacket(CRTPPacket *pk) {
-    return -1; // ENETDOWN
-}
-
+static int nopFunc(void);
 static struct crtpLinkOperations nopLink = {
-    .setEnable = nopSetEnable,
-    .sendPacket = nopSendPacket,
-    .receivePacket = nopReceivePacket,
+  .setEnable         = (void*) nopFunc,
+  .sendPacket        = (void*) nopFunc,
+  .receivePacket     = (void*) nopFunc,
 }; 
 
 static struct crtpLinkOperations *link = &nopLink;
@@ -44,7 +30,7 @@ static QueueHandle_t  rxQueue;
 
 #define CRTP_NBR_OF_PORTS 16
 #define CRTP_TX_QUEUE_SIZE 20
-#define CRTP_RX_QUEUE_SIZE 10
+#define CRTP_RX_QUEUE_SIZE 2
 
 static void crtpTxTask(void *param);
 static void crtpRxTask(void *param);
@@ -54,194 +40,136 @@ static volatile CrtpCallback callbacks[CRTP_NBR_OF_PORTS];
 
 void crtpInit(void)
 {
-    if(isInit) {
-        return;
-    }
+  if(isInit)
+    return;
 
-    // Inicializar arrays
-    for (int i = 0; i < CRTP_NBR_OF_PORTS; i++) {
-        queues[i] = NULL;
-        callbacks[i] = NULL;
-    }
-
-    tmpQueue = xQueueCreate(CRTP_TX_QUEUE_SIZE, sizeof(CRTPPacket));
-    if (tmpQueue == NULL) {
-        ESP_LOGE("CRTP", "Error creando cola TX");
-        return;
-    }
-
-    rxQueue = xQueueCreate(CRTP_RX_QUEUE_SIZE, sizeof(CRTPPacket));
-    if (rxQueue == NULL) {
-        ESP_LOGE("CRTP", "Error creando cola RX");
-        vQueueDelete(tmpQueue);
-        return;
-    }
-
-    /* Start Rx/Tx tasks */
-    if (xTaskCreate(crtpTxTask, "CRTP-Tx", configMINIMAL_STACK_SIZE + 1024, 
-                   NULL, /*priority*/2, NULL) != pdPASS) {
-        ESP_LOGE("CRTP", "Error creando tarea TX");
-        vQueueDelete(tmpQueue);
-        vQueueDelete(rxQueue);
-        return;
-    }
-
-    if (xTaskCreate(crtpRxTask, "CRTP-Rx", configMINIMAL_STACK_SIZE + 1024, 
-                   NULL, /*priority*/2, NULL) != pdPASS) {
-        ESP_LOGE("CRTP", "Error creando tarea RX");
-        vQueueDelete(tmpQueue);
-        vQueueDelete(rxQueue);
-        return;
-    }
+  tmpQueue = xQueueCreate(CRTP_TX_QUEUE_SIZE, sizeof(CRTPPacket));
+  rxQueue = xQueueCreate(CRTP_RX_QUEUE_SIZE, sizeof(CRTPPacket));
+  /* Start Rx/Tx tasks */
+    xTaskCreate(crtpTxTask, "CRTP-Tx",
+                configMINIMAL_STACK_SIZE, NULL, /*priority*/2, NULL);
+    xTaskCreate(crtpRxTask, "CRTP-Rx",
+                configMINIMAL_STACK_SIZE, NULL, /*priority*/2, NULL);
   
-    isInit = true;
-    ESP_LOGI("CRTP", "CRTP inicializado correctamente");
+  isInit = true;
 }
 
 bool crtpTest(void)
 {
-    return isInit;
+  return isInit;
 }
 
 void crtpInitTaskQueue(CRTPPort portId)
 {
-    if (portId >= CRTP_NBR_OF_PORTS) {
-        ESP_LOGE("CRTP", "Port ID inválido: %d", portId);
-        return;
-    }
-    
-    if (queues[portId] != NULL) {
-        ESP_LOGW("CRTP", "Queue para port %d ya existe", portId);
-        return;
-    }
+  ASSERT(queues[portId] == NULL);
   
-    queues[portId] = xQueueCreate(5, sizeof(CRTPPacket));
-    if (queues[portId] == NULL) {
-        ESP_LOGE("CRTP", "Error creando queue para port %d", portId);
-    }
+  queues[portId] = xQueueCreate(1, sizeof(CRTPPacket));
 }
 
 int crtpReceivePacket(CRTPPort portId, CRTPPacket *p)
 {
-    if (portId >= CRTP_NBR_OF_PORTS || queues[portId] == NULL || p == NULL) {
-        return pdFALSE;
-    }
+  ASSERT(queues[portId]);
+  ASSERT(p);
     
-    return xQueueReceive(queues[portId], p, 0);
+  return xQueueReceive(queues[portId], p, 0);
 }
 
 int crtpReceivePacketBlock(CRTPPort portId, CRTPPacket *p)
 {
-    if (portId >= CRTP_NBR_OF_PORTS || queues[portId] == NULL || p == NULL) {
-        return pdFALSE;
-    }
+  ASSERT(queues[portId]);
+  ASSERT(p);
   
-    return xQueueReceive(queues[portId], p, portMAX_DELAY);
+  return xQueueReceive(queues[portId], p, portMAX_DELAY);
 }
 
+
 int crtpReceivePacketWait(CRTPPort portId, CRTPPacket *p, int wait) {
-    if (portId >= CRTP_NBR_OF_PORTS || queues[portId] == NULL || p == NULL) {
-        return pdFALSE;
-    }
+  ASSERT(queues[portId]);
+  ASSERT(p);
   
-    return xQueueReceive(queues[portId], p, pdMS_TO_TICKS(wait));
+  return xQueueReceive(queues[portId], p, M2T(wait));
 }
 
 void crtpTxTask(void *param)
 {
-    CRTPPacket p;
-    BaseType_t xResult;
+  CRTPPacket p;
 
-    ESP_LOGI("CRTP-TX", "Tarea TX iniciada");
-
-    while (true) {
-        xResult = xQueueReceive(tmpQueue, &p, portMAX_DELAY);
-        
-        if (xResult == pdTRUE) {
-            if (link->sendPacket(&p) != 0) {
-                ESP_LOGW("CRTP-TX", "Error enviando paquete");
-            }
-        }
+  while (true)
+  {
+    if (xQueueReceive(tmpQueue, &p, portMAX_DELAY) == pdTRUE)
+    {
+      link->sendPacket(&p);
     }
+  }
 }
 
 void crtpRxTask(void *param)
 {
-    CRTPPacket p;
-    static unsigned int droppedPacket = 0;
+  CRTPPacket p;
+  static unsigned int droppedPacket=0;
 
-    ESP_LOGI("CRTP-RX", "Tarea RX iniciada");
-
-    while (true) {
-        if (link->receivePacket(&p) == 0) {
-            // Paquete recibido correctamente
-            if (p.port < CRTP_NBR_OF_PORTS && queues[p.port] != NULL) {
-                if (xQueueSend(queues[p.port], &p, 0) != pdTRUE) {
-                    // Cola llena, descartar paquete más antiguo y enviar el nuevo
-                    CRTPPacket old_pkt;
-                    xQueueReceive(queues[p.port], &old_pkt, 0);
-                    xQueueSend(queues[p.port], &p, 0);
-                    droppedPacket++;
-                    ESP_LOGW("CRTP-RX", "Cola llena, paquete descartado. Total: %u", droppedPacket);
-                }
-            } else {
-                droppedPacket++;
-                ESP_LOGW("CRTP-RX", "Port %d no tiene queue. Paquetes descartados: %u", p.port, droppedPacket);
-            }
-            
-            // Llamar callback si está registrado
-            if (p.port < CRTP_NBR_OF_PORTS && callbacks[p.port] != NULL) {
-                callbacks[p.port](&p);
-            }
-        } else {
-            // No hay paquetes disponibles, esperar un poco
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
+  while (true)
+  {
+    if (!link->receivePacket(&p))
+    {
+      if(queues[p.port])
+      {
+        // TODO: If full, remove one packet and then send
+        xQueueSend(queues[p.port], &p, 0);
+      } else {
+        droppedPacket++;
+      }
+      
+      if(callbacks[p.port])
+        callbacks[p.port](&p);  //Dangerous?
     }
+  }
 }
 
 void crtpRegisterPortCB(int port, CrtpCallback cb)
 {
-    if (port >= CRTP_NBR_OF_PORTS) {
-        ESP_LOGE("CRTP", "Port ID inválido para callback: %d", port);
-        return;
-    }
+  if (port>CRTP_NBR_OF_PORTS)
+    return;
   
-    callbacks[port] = cb;
-    ESP_LOGI("CRTP", "Callback registrado para port %d", port);
+  callbacks[port] = cb;
 }
 
 int crtpSendPacket(CRTPPacket *p)
 {
-    if (p == NULL || !isInit) {
-        return pdFALSE;
-    }
+  ASSERT(p); 
 
-    return xQueueSend(tmpQueue, p, 0);
+  return xQueueSend(tmpQueue, p, 0);
 }
 
 int crtpSendPacketBlock(CRTPPacket *p)
 {
-    if (p == NULL || !isInit) {
-        return pdFALSE;
-    }
+  ASSERT(p); 
 
-    return xQueueSend(tmpQueue, p, portMAX_DELAY);
+  return xQueueSend(tmpQueue, p, portMAX_DELAY);
+}
+
+void crtpPacketReveived(CRTPPacket *p)
+{
+  portBASE_TYPE xHigherPriorityTaskWoken;
+
+  xHigherPriorityTaskWoken = pdFALSE;
+  xQueueSendFromISR(rxQueue, p, &xHigherPriorityTaskWoken);
 }
 
 void crtpSetLink(struct crtpLinkOperations * lk)
 {
-    if (link != NULL) {
-        link->setEnable(false);
-    }
+  if(link)
+    link->setEnable(false);
 
-    if (lk != NULL) {
-        link = lk;
-        ESP_LOGI("CRTP", "Nuevo enlace CRTP configurado");
-    } else {
-        link = &nopLink;
-        ESP_LOGW("CRTP", "Enlace CRTP configurado como nop");
-    }
+  if (lk)
+    link = lk;
+  else
+    link = &nopLink;
 
-    link->setEnable(true);
+  link->setEnable(true);
+}
+
+static int nopFunc(void)
+{
+  return ENETDOWN;
 }

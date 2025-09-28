@@ -452,3 +452,32 @@ void wifilinkGetStats(uint32_t* packets_received, uint32_t* last_packet_time) {
         *last_packet_time = lastPacketTimestamp;
     }
 }
+
+// En wifilink.c - función para enviar paquetes de log
+int wifilinkSendLogPacket(CRTPPacket *pk) {
+    if (!isInit || sock < 0 || !socket_ready || pk == NULL) {
+        return -1;
+    }
+
+    if (pk->size > CRTP_MAX_DATA_SIZE) {
+        return -2;
+    }
+
+    // Preparar buffer con cabecera CRTP para LOG (puerto 5)
+    uint8_t tx_buffer[CRTP_MAX_DATA_SIZE + 1];
+    tx_buffer[0] = (5 << 4) | (pk->channel & 0x0F); // Puerto LOG = 5
+    if (pk->size > 0) {
+        memcpy(tx_buffer + 1, pk->data, pk->size);
+    }
+
+    // Enviar a la misma dirección de donde vinieron los comandos
+    int err = sendto(sock, tx_buffer, pk->size + 1, 0, 
+                    (struct sockaddr *)&server_addr, sizeof(server_addr));
+    if (err < 0) {
+        ESP_LOGE(TAG, "Error al enviar paquete LOG: errno %d", errno);
+        return -1;
+    }
+    
+    ESP_LOGD(TAG, "Paquete LOG enviado: channel=%d, size=%d", pk->channel, pk->size);
+    return 0;
+}
