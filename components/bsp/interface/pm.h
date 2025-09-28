@@ -62,4 +62,6 @@ float pmGetBatteryVoltageMin(void);
  */
 float pmGetBatteryVoltageMax(void);
 
+bool pmIsBatteryOk(void);
+
 #endif /* PM_H_ */

@@ -9,7 +9,6 @@
 
 #include "pm.h"
 #include "adc.h"
-// Assuming these headers exist and have the required functions
 #include "led.h"
 #include "ledseq.h"
 #include "commander.h"
@@ -25,22 +24,30 @@ static float    batteryVoltage;
 static float    batteryVoltageMin = 6.0f;
 static float    batteryVoltageMax = 0.0f;
 static uint32_t batteryCriticalLowTimeStamp;
+static bool batteryOk = false; // Variable para rastrear el estado de la batería
 
 // --- Internal Functions ---
 static void pmSystemShutdown(void)
 {
 #ifdef ACTIVATE_AUTO_SHUTDOWN
     ESP_LOGW(TAG, "Initiating system shutdown!");
-    // You'll need to define what your shutdown action is,
-    // e.g., a specific GPIO pin to turn off power.
-    // For now, this is a placeholder.
-    // gpio_set_level(PM_GPIO_SYSOFF, 1);
+    // Tu lógica de apagado aquí
 #endif
 }
 
 static void pmSetBatteryVoltage(float voltage)
 {
     batteryVoltage = voltage;
+    
+    // Actualizar el estado de la batería
+    bool previousBatteryOk = batteryOk;
+    batteryOk = (voltage >= PM_BAT_LOW_VOLTAGE); // Usar el mismo umbral que en pmTask
+    
+    if (batteryOk != previousBatteryOk) {
+        ESP_LOGI(TAG, "Estado de batería cambiado: %s (%.2fV)", 
+                batteryOk ? "OK" : "BAJA", voltage);
+    }
+    
     if (batteryVoltageMax < voltage)
     {
         batteryVoltageMax = voltage;
@@ -51,13 +58,23 @@ static void pmSetBatteryVoltage(float voltage)
     }
 }
 
+// --- Nueva función pública ---
+bool pmIsBatteryOk(void)
+{
+    return batteryOk && (batteryVoltage >= PM_BAT_LOW_VOLTAGE);
+}
+
 // --- Public Functions ---
 void pmInit(void)
 {
     if(isInit)
         return;
 
-    xTaskCreate(pmTask, "PWRMGNT", 4096, NULL, 5, NULL); // Increased stack size for safety
+    // Inicializar con estado por defecto
+    batteryVoltage = 0.0f;
+    batteryOk = false;
+    
+    xTaskCreate(pmTask, "PWRMGNT", 4096, NULL, 5, NULL);
     
     isInit = true;
     ESP_LOGI(TAG, "Power Management module initialized.");
@@ -126,15 +143,18 @@ void pmTask(void *param)
             switch (pmState)
             {
                 case lowPower:
+                    ESP_LOGW(TAG, "⚠️ BATERÍA BAJA: %.2fV", voltage);
                     ledseqRun(LED_RED, seq_lowbat);
                     systemSetCanFly(false);
                     break;
                 case battery:
+                    ESP_LOGI(TAG, "✅ BATERÍA OK: %.2fV", voltage);
                     ledseqStop(LED_RED, seq_lowbat);
                     systemSetCanFly(true);
-                    wifilinkReInit(); // Changed from radiolinkReInit()
+                    wifilinkReInit();
                     break;
                 case shutDown:
+                    ESP_LOGE(TAG, "❌ BATERÍA CRÍTICA: %.2fV - APAGANDO", voltage);
                     ledseqStop(LED_RED, seq_lowbat);
                     pmSystemShutdown();
                     break;

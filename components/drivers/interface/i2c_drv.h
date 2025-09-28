@@ -24,7 +24,7 @@ typedef struct {
     uint8_t         nbrOfRetries;
     I2cDirection    direction;
     I2cStatus       status;
-    xQueueHandle    clientQueue;
+    QueueHandle_t   clientQueue;    // <-- CORRECCIÓN: cambiado de xQueueHandle a QueueHandle_t
     bool            isInternal16bit;
     uint16_t        internalAddress;
     uint8_t         *buffer;

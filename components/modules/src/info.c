@@ -41,6 +41,11 @@ typedef enum {
 void infoTask(void *param);
 
 void infoInit() {
+    // 1. Inicializar la cola para el puerto 8 (CRTP_PORT_INFO)
+    // El puerto 8 es el que estás usando en el script Python (Header: 0x80 -> Port 8, Channel 0)
+    crtpInitTaskQueue(CRTP_PORT_INFO); 
+    
+    // 2. Crear la tarea que recibirá de esa cola
     xTaskCreate(infoTask, "Info",
                 configMINIMAL_STACK_SIZE + 1024, NULL, /*priority*/2, NULL);
 }

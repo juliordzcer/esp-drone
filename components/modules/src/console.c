@@ -1,29 +1,3 @@
-/**
- *    ||          ____  _ __                           
- * +------+      / __ )(_) /_______________ _____  ___ 
- * | 0xBC |     / __  / / __/ ___/ ___/ __ `/_  / / _ \
- * +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
- *  ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
- *
- * Crazyflie control firmware
- *
- * Copyright (C) 2011-2012 Bitcraze AB
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, in version 3.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
- * console.c - Used to send console data to client
- */
-
 #include <stdbool.h>
 
 /*FreeRtos includes*/
@@ -34,7 +8,8 @@
 #include "crtp.h"
 
 CRTPPacket messageToPrint;
-xSemaphoreHandle synch = NULL;
+// CORRECCIÓN: cambiado de xSemaphoreHandle a SemaphoreHandle_t
+SemaphoreHandle_t synch = NULL; 
 
 static bool isInit;
 
@@ -54,7 +29,16 @@ void consoleInit()
 
   messageToPrint.size = 0;
   messageToPrint.header = CRTP_HEADER(CRTP_PORT_CONSOLE, 0);
-  vSemaphoreCreateBinary(synch);
+  
+  // CORRECCIÓN: Usar la función moderna xSemaphoreCreateBinary() 
+  // en lugar de la macro obsoleta vSemaphoreCreateBinary()
+  synch = xSemaphoreCreateBinary();
+  
+  if (synch != NULL) {
+      // Un semáforo binario creado por xSemaphoreCreateBinary comienza vacío, 
+      // por lo que le damos el 'token' para que esté disponible inmediatamente.
+      xSemaphoreGive(synch); 
+  }
   
   isInit = true;
 }

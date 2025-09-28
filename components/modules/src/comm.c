@@ -1,46 +1,22 @@
 /*
- * ||          ____  _ __
- * +------+      / __ )(_) /_______________ _____  ___
- * | 0xBC |     / __  / / __/ ___/ ___/ __ `/_  / / _ \
- * +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
- * ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
- *
- * Crazyflie control firmware
- *
- * Copyright (C) 2011-2012 Bitcraze AB
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, in version 3.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- *
  * comm.c - High level communication module for ESP32 with Wi-Fi
  */
 
 #include <stdbool.h>
 #include "esp_log.h"
-#include "wifilink.h" // Se incluyó esta línea para acceder a las funciones de Wi-Fi.
+#include "wifilink.h" 
 #include "crtp.h"
 #include "console.h"
-#include "crtpservice.h"
+#include "crtpservice.h" // Asegúrate de que este archivo exista.
 #include "param.h"
 #include "log.h"
-#include "uart.h"
 #include "comm.h"
-#include "freertos/FreeRTOS.h" // Se incluyó para usar pdMS_TO_TICKS
+#include "freertos/FreeRTOS.h"
 
 static const char *TAG = "COMM";
 
 static bool isInit = false;
 
-// Definimos un timeout para la conexión Wi-Fi, 15 segundos es un valor seguro.
 #define WIFI_CONNECTION_TIMEOUT_MS 15000
 
 void commInit(void)
@@ -52,31 +28,31 @@ void commInit(void)
 
   ESP_LOGI(TAG, "Initializing communication modules...");
 
-  // 1. Inicializar el enlace Wi-Fi para la comunicación CRTP.
-  ESP_LOGI(TAG, "Debug: Calling wifilinkInit()...");
-  wifilinkInit();
-  ESP_LOGI(TAG, "Debug: wifilinkInit() done.");
-
-  // 2. Esperar a que la conexión Wi-Fi se establezca.
-  ESP_LOGI(TAG, "Waiting for Wi-Fi connection...");
+  // 1. Esperar a que la conexión Wi-Fi se establezca (o que entre en modo AP).
+  // La inicialización de wifilink fue hecha en systemInit().
+  ESP_LOGI(TAG, "Waiting for Wi-Fi link ready state (STA or AP)...");
   if (!wifilinkWaitForConnection(pdMS_TO_TICKS(WIFI_CONNECTION_TIMEOUT_MS))) {
-      ESP_LOGE(TAG, "❌ Failed to establish Wi-Fi connection. Aborting communication initialization.");
-      return;
+      ESP_LOGE(TAG, "❌ Failed to establish Wi-Fi link. Comm init continuing, but link is likely broken.");
+      // El commInit continúa para permitir la consola local si fuera necesario, 
+      // pero el enlace remoto no funcionará si la espera falla.
   }
   
-  // 3. Inicializar el stack del protocolo CRTP (solo si la conexión Wi-Fi fue exitosa).
+  // 2. Inicializar el stack del protocolo CRTP.
   ESP_LOGI(TAG, "Debug: Calling crtpInit()...");
   crtpInit();
   ESP_LOGI(TAG, "Debug: crtpInit() done.");
 
-  // 4. Configurar el enlace CRTP para usar las funciones del enlace Wi-Fi.
+  // 3. Configurar el enlace CRTP para usar las funciones del enlace Wi-Fi.
   ESP_LOGI(TAG, "Debug: Calling crtpSetLink()...");
   crtpSetLink(wifilinkGetLink());
   ESP_LOGI(TAG, "Debug: crtpSetLink() done.");
 
-  // 5. Inicializar otros servicios relacionados con la comunicación.
+  // 4. Inicializar otros servicios relacionados con la comunicación.
   ESP_LOGI(TAG, "Debug: Initializing other services...");
-  crtpserviceInit();
+  // ----------------------------------------------------
+  // 👉 DESCOMENTAR: Asumimos que esta es la intención de tu código.
+  crtpserviceInit(); 
+  // ----------------------------------------------------
   logInit();
   consoleInit();
   paramInit();

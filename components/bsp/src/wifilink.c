@@ -49,8 +49,9 @@ static int sock = -1;
 static struct sockaddr_in server_addr;
 static bool is_connected = false;
 static uint32_t lastPacketTimestamp = 0;
-EventGroupHandle_t wifi_event_group; // Mantenlo aquí para que sea accesible
+static EventGroupHandle_t wifi_event_group;
 static esp_netif_ip_info_t ip_info;
+static bool socket_ready = false;
 
 // --- Prototipos de funciones internas ---
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
@@ -74,16 +75,19 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         ESP_LOGI(TAG, "Wi-Fi STA iniciado, conectando...");
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGI(TAG, "Wi-Fi desconectado, intentando reconectar...");
+        ESP_LOGW(TAG, "Wi-Fi desconectado, intentando reconectar...");
         is_connected = false;
+        socket_ready = false;
         xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
         xEventGroupSetBits(wifi_event_group, WIFI_FAIL_BIT);
+        vTaskDelay(pdMS_TO_TICKS(WIFI_RECONNECT_DELAY_MS));
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         memcpy(&ip_info, &event->ip_info, sizeof(ip_info));
         ESP_LOGI(TAG, "Conectado! IP obtenida: " IPSTR, IP2STR(&ip_info.ip));
         is_connected = true;
+        lastPacketTimestamp = xTaskGetTickCount(); // Inicializar timestamp
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
         print_ip_address();
     }
@@ -107,7 +111,7 @@ static void setEnable(bool enable) {
 }
 
 // --- Tarea principal para recibir datos por Wi-Fi ---
-static void wifilinkTask(void *arg) {
+static void wifilinkTask(void *param) {
     uint8_t rx_buffer[128];
     struct sockaddr_in source_addr;
     socklen_t socklen = sizeof(source_addr);
@@ -136,7 +140,11 @@ static void wifilinkTask(void *arg) {
             return;
         }
         
-        // Configurar socket
+        // Configurar socket para no bloquear
+        int flags = fcntl(sock, F_GETFL, 0);
+        fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+        
+        // Configurar opciones del socket
         int enable = 1;
         setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
         
@@ -148,6 +156,7 @@ static void wifilinkTask(void *arg) {
             return;
         }
         
+        socket_ready = true;
         ESP_LOGI(TAG, "Socket UDP creado y enlazado en puerto %d", UDP_PORT);
         ESP_LOGI(TAG, "✅ Listo para recibir conexiones CRTP");
         ESP_LOGI(TAG, "📍 Conectate a la misma red y usa IP: " IPSTR ":%d", 
@@ -160,7 +169,7 @@ static void wifilinkTask(void *arg) {
 
     // Bucle principal de recepción
     while (1) {
-        if (sock < 0) {
+        if (sock < 0 || !socket_ready) {
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
@@ -168,43 +177,47 @@ static void wifilinkTask(void *arg) {
         int len = recvfrom(sock, rx_buffer, sizeof(rx_buffer) - 1, 0, 
                           (struct sockaddr *)&source_addr, &socklen);
 
-        if (len < 0) {
+        if (len > 0) {
+            // Actualizar timestamp del último paquete
+            lastPacketTimestamp = xTaskGetTickCount();
+
+            ESP_LOGD(TAG, "Paquete UDP recibido de %s:%d, tamaño: %d bytes", 
+                     inet_ntoa(source_addr.sin_addr), ntohs(source_addr.sin_port), len);
+
+            // Procesar paquete CRTP
+            if (len > 0 && len <= (CRTP_MAX_DATA_SIZE + 1)) {
+                CRTPPacket packet;
+                packet.size = len - 1;
+                packet.port = (rx_buffer[0] >> 4) & 0x0F;
+                packet.channel = rx_buffer[0] & 0x0F;
+                
+                if (packet.size > 0) {
+                    memcpy(packet.data, rx_buffer + 1, packet.size);
+                }
+
+                // Guardar dirección del cliente para responder
+                memcpy(&server_addr, &source_addr, sizeof(source_addr));
+
+                if (xQueueSend(rxQueue, &packet, pdMS_TO_TICKS(10)) != pdPASS) {
+                    ESP_LOGW(TAG, "La cola de recepción está llena. Paquete descartado.");
+                }
+            }
+        } else if (len < 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 ESP_LOGE(TAG, "Error en recvfrom: errno %d", errno);
-            }
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-
-        // Actualizar timestamp del último paquete
-        lastPacketTimestamp = xTaskGetTickCount();
-
-        ESP_LOGD(TAG, "Paquete UDP recibido de %s:%d, tamaño: %d bytes", 
-                 inet_ntoa(source_addr.sin_addr), ntohs(source_addr.sin_port), len);
-
-        // Procesar paquete CRTP
-        if (len > 0 && len <= (CRTP_MAX_DATA_SIZE + 1)) {
-            CRTPPacket packet;
-            packet.size = len - 1;
-            if (packet.size > 0) {
-                memcpy(packet.data + 1, rx_buffer, packet.size);
-            }
-            packet.port = (rx_buffer[0] >> 4) & 0x0F;
-            packet.channel = rx_buffer[0] & 0x0F;
-
-            // Guardar dirección del cliente para responder
-            memcpy(&server_addr, &source_addr, sizeof(source_addr));
-
-            if (xQueueSend(rxQueue, &packet, pdMS_TO_TICKS(10)) != pdPASS) {
-                ESP_LOGW(TAG, "La cola de recepción está llena. Paquete descartado.");
+                // Reintentar después de un error
+                vTaskDelay(pdMS_TO_TICKS(100));
             }
         }
+        
+        // Pequeña pausa para no saturar la CPU
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 // --- Implementación de las funciones de la API del enlace ---
 static int sendPacket(CRTPPacket *pk) {
-    if (!isInit || sock < 0 || pk == NULL) {
+    if (!isInit || sock < 0 || !socket_ready || pk == NULL) {
         return -1;
     }
 
@@ -245,8 +258,27 @@ static int receivePacket(CRTPPacket *pk) {
 }
 
 static bool isConnected(void) {
-    return isInit && is_connected && 
-           (xTaskGetTickCount() - lastPacketTimestamp) < pdMS_TO_TICKS(WIFI_TIMEOUT_MS);
+    return isInit && is_connected && socket_ready;
+}
+
+// --- Función pública para verificar conexión ---
+bool wifilinkIsConnected(void)
+{
+    if (!isInit || !is_connected || !socket_ready) {
+        ESP_LOGD(TAG, "Conexión no lista: isInit=%d, is_connected=%d, socket_ready=%d", 
+                 isInit, is_connected, socket_ready);
+        return false;
+    }
+    
+    // Para debug, mostrar estado detallado periódicamente
+    static uint32_t lastDebugTime = 0;
+    uint32_t currentTime = xTaskGetTickCount();
+    if (currentTime - lastDebugTime > pdMS_TO_TICKS(5000)) {
+        ESP_LOGI(TAG, "✅ Estado Wi-Fi: Conectado, Socket listo");
+        lastDebugTime = currentTime;
+    }
+    
+    return true;
 }
 
 // --- Funciones públicas de inicialización ---
@@ -257,6 +289,11 @@ void wifilinkInit() {
     }
 
     ESP_LOGI(TAG, "Inicializando enlace Wi-Fi (modo Station)...");
+
+    // Inicializar variables
+    is_connected = false;
+    socket_ready = false;
+    lastPacketTimestamp = xTaskGetTickCount();
 
     // 1. Inicializar NVS
     esp_err_t ret = nvs_flash_init();
@@ -273,6 +310,10 @@ void wifilinkInit() {
     
     // 3. Crear event group
     wifi_event_group = xEventGroupCreate();
+    if (wifi_event_group == NULL) {
+        ESP_LOGE(TAG, "Error creando event group");
+        return;
+    }
     
     // 4. Configurar interfaz de red en modo Station
     esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
@@ -299,11 +340,13 @@ void wifilinkInit() {
         .sta = {
             .ssid = WIFI_SSID,
             .password = WIFI_PASSWORD,
+            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
     
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE)); // Desactivar power saving para mejor rendimiento
     ESP_ERROR_CHECK(esp_wifi_start());
 
     ESP_LOGI(TAG, "Wi-Fi Station iniciado, conectando a: %s", WIFI_SSID);
@@ -312,6 +355,7 @@ void wifilinkInit() {
     rxQueue = xQueueCreate(INCOMING_QUEUE_SIZE, sizeof(CRTPPacket));
     if (rxQueue == NULL) {
         ESP_LOGE(TAG, "Error creando la cola de recepción");
+        vEventGroupDelete(wifi_event_group);
         return;
     }
 
@@ -319,14 +363,18 @@ void wifilinkInit() {
     if (xTaskCreate(wifilinkTask, "wifilinkTask", 4096, NULL, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Error creando la tarea Wi-Fi");
         vQueueDelete(rxQueue);
+        vEventGroupDelete(wifi_event_group);
         return;
     }
 
     isInit = true;
+    ESP_LOGI(TAG, "Wi-Fi link inicializado correctamente");
 }
 
 bool wifilinkTest() {
-    return isInit && is_connected && sock >= 0;
+    bool result = isInit && is_connected && socket_ready;
+    ESP_LOGI(TAG, "Test Wi-Fi: %s", result ? "PASS" : "FAIL");
+    return result;
 }
 
 struct crtpLinkOperations* wifilinkGetLink() {
@@ -342,7 +390,13 @@ void wifilinkReInit(void) {
     }
     
     is_connected = false;
+    socket_ready = false;
     isInit = false;
+    
+    // Limpiar event group
+    if (wifi_event_group) {
+        xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
+    }
     
     vTaskDelay(pdMS_TO_TICKS(2000));
     wifilinkInit();
@@ -369,8 +423,32 @@ bool wifilinkWaitForConnection(TickType_t timeout) {
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "✅ Conexión Wi-Fi exitosa.");
         return true;
-    } else {
-        ESP_LOGE(TAG, "❌ Fallo en la conexión Wi-Fi por timeout.");
+    } else if (bits & WIFI_FAIL_BIT) {
+        ESP_LOGE(TAG, "❌ Fallo en la conexión Wi-Fi.");
         return false;
+    } else {
+        ESP_LOGE(TAG, "❌ Timeout en la conexión Wi-Fi.");
+        return false;
+    }
+}
+
+// --- Función para obtener información de conexión ---
+void wifilinkGetConnectionInfo(char* ssid, char* ip, int ip_len) {
+    if (ssid) {
+        strncpy(ssid, WIFI_SSID, 32);
+    }
+    if (ip && is_connected) {
+        snprintf(ip, ip_len, IPSTR, IP2STR(&ip_info.ip));
+    }
+}
+
+// --- Función para obtener estadísticas ---
+void wifilinkGetStats(uint32_t* packets_received, uint32_t* last_packet_time) {
+    if (packets_received) {
+        // Esta implementación necesitaría llevar un contador de paquetes
+        *packets_received = 0; // Placeholder
+    }
+    if (last_packet_time) {
+        *last_packet_time = lastPacketTimestamp;
     }
 }
